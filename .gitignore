@@ -6,3 +6,6 @@ sim
 
 # 预览生成文件
 /tmp/ui_font_preview.png
+
+# 本地工具（不随库发布）
+private/

@@ -17,8 +17,8 @@
 #include "solar_fast.h"
 
 /* ------------------------------------------------------------------
- * ⚠️ 整个文件关掉 `-Wformat-truncation`。**这不是图省事**，理由是这个警告
- *    对渲染层的 API 形态**固有地**是假阳性，改代码改不掉：
+ * 注意：整个文件关掉 `-Wformat-truncation`。该警告对渲染层 API 形态
+ *    **固有地**是假阳性，改代码改不掉：
  *
  *   1. 渲染层的每个格式化函数都是 `f(char *b, size_t n, ...)` 这个形态
  *      （`fmt_date` / `fmt_deg` / `setting_value` / `birth_value` / `bset_value`
@@ -31,11 +31,11 @@
  *      而调用点上的值是经度、纬度、日地距离、黄经 —— 定义域早就有界。
  *      它的浮点值域分析不做这种跨语句推导。
  *
- * **放弃了什么（诚实说）**：以后有人往这个文件里写一个**真的**太小的缓冲，
- * 编译器不会再提醒。兜底是像素回归 —— `sim --dump` 那 120 张帧里任何一处
- * 被截断的标签都会直接画出来看得见（`make check` 的那批帧比对也在）。
- * 库那一侧没有关整个文件：`sf_qishuo.c` 是**逐函数**夹的，因为库要在别人
- * 的工程里用未知的编译选项编，能保的检查要尽量保住。
+ * **代价**：往这个文件里写一个**真的**太小的缓冲，编译器不会再提醒。兜底
+ * 是像素回归 —— `sim --dump` 那 120 张帧里任何一处被截断的标签都会直接画
+ * 出来看得见（`make check` 的那批帧比对也在）。库那一侧没有关整个文件：
+ * `sf_qishuo.c` 是**逐函数**夹的，因为库要在别人的工程里用未知的编译选项
+ * 编，能保的检查要尽量保住。
  * ------------------------------------------------------------------ */
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -44,7 +44,7 @@
 /* ------------------------------------------------------------------
  * int32_t → int，只为喂给 %d。
  *
- * ⚠️ 这不是多此一举：**Xtensa（ESP-IDF）的 newlib 里 `int32_t` 是 `long`**，
+ * 注意：这不是多此一举：**Xtensa（ESP-IDF）的 newlib 里 `int32_t` 是 `long`**，
  * 而 `%d` 要的是 `int`。Mac 上 `int32_t` 恰好就是 `int`，所以本地怎么编都
  * 干净；换到 IDF 就是一片 `-Werror=format=`（GCC 把格式串不匹配当错误）。
  *
@@ -71,9 +71,9 @@ static int g_utc_offset_min = 480;
  * 库里全是 JD(TT)；屏上要的是**用户钟面上的读数**，所以两步都要走：
  * 先减成 UTC，再加显示时区。两道都收在这一个函数里，页面只管调它。
  *
- * ⚠️ 减的是 **UTC**（sf_tt_to_utc，走闰秒表），不是 UT1。两者差一个 DUT1
+ * 注意：减的是 **UTC**（sf_tt_to_utc，走闰秒表），不是 UT1。两者差一个 DUT1
  * （现在约 −0.1 s，历史上到过 ±0.9 s）—— 秒级，而屏上最快也就到分钟，
- * 看不出来。但别以为它们是同一个东西：恒星时 / 出没时刻要的是 UT1。
+ * 看不出来。但两者不是同一个东西：恒星时 / 出没时刻要的是 UT1。
  * ------------------------------------------------------------------ */
 static double to_local(double jd_tt)
 {
@@ -109,10 +109,10 @@ static void fmt_ymd(char *b, size_t n, double jd)       /* 2026-09-19 */
 
 /* JD(UT) + 显示时区 → HH:MM。日出日落用。
  * 出没也是「事件」，同节气/朔望按历书口径**四舍五入到分**。
- * ⚠️ 喂进来的是**出没时刻（UT1）**，加显示偏移只是把它落到钟面上，
- * 不是严格意义的真民用时 —— 差一个 DUT1（≤0.9 s）。原先写的是「分钟级
- * 看不见」，但取整点就在 :30 秒附近，0.9 秒足够翻边，所以这句别当成
- * 永远成立；真要对齐历书得先把 UT1 换成 UTC 再取整（见 to_local）。 */
+ * 注意：喂进来的是**出没时刻（UT1）**，加显示偏移只是把它落到钟面上，
+ * 不是严格意义的真民用时 —— 差一个 DUT1（≤0.9 s）。取整点就在 :30 秒附近，
+ * 0.9 秒足以翻边，所以「分钟级看不见」并不永远成立；要严格对齐历书须先
+ * 把 UT1 换成 UTC 再取整（见 to_local）。 */
 static void fmt_hm_local(char *b, size_t n, double jd_ut)
 {
     const double j = ui_jd_round_to_minute(jd_ut + g_utc_offset_min / 1440.0);
@@ -179,7 +179,7 @@ static void ganzhi_str(char *b, size_t n, sf_ganzhi g)
 
 /* 农历年的干支 —— 给它旁边那些**农历**月日配的年。
  *
- * ⚠️ 用的是 sf_ganzhi_year_of(lunar.historical_year)，**不是 a->pillars.year**。
+ * 注意：用的是 sf_ganzhi_year_of(lunar.historical_year)，**不是 a->pillars.year**。
  * 后者是年柱，锚**立春**；农历年跟**正月初一**换。两者在立春到春节之间差整整
  * 一年：2026 年立春 2/4、春节 2/17，2/10 那天年柱已经是丙午，农历还在乙巳年
  * 腊月 —— 配错了屏上就是「丙午年 腊月廿三」，而丙午年根本没有腊月。
@@ -223,7 +223,7 @@ static void draw_topbar(const ui_app *a, const ui_theme *t,
 
     ui_text_in(UI_BOX(0.03f, 0.00f, 0.60f, 0.10f), UI_LEFT, UI_VCENTER,
                &ui_font_s, c, title);
-    /* ⚠️ ui_box 是 (x, y, w, h)，不是「左右边缘」。想右对齐到 0.97 就得写
+    /* 注意：ui_box 是 (x, y, w, h)，不是「左右边缘」。想右对齐到 0.97 就得写
      * x = 0.67, w = 0.30 —— 直接写 x=0.97 会让文字整个跑到屏外。 */
     if (right && *right)
         ui_text_in(UI_BOX(0.67f, 0.00f, 0.30f, 0.10f), UI_RIGHT, UI_VCENTER,
@@ -304,8 +304,8 @@ static void page_today(const ui_app *a, const ui_theme *t)
      * 干支「丁酉月 丁酉日 丙午时」= 9 个全角 + 2 空格 = 120 px。都放得下。
      *
      * 年柱只在第一行出现（农历那行的「丙午年」就是它），第二行不重复 ——
-     * 两行加起来正好是完整的年/月/日/时，也就是原来那个「八」页的内容。
-     * 那页已经删了，理由见 ui.h 里 ui_page 的注释。 */
+     * 两行加起来是完整的年/月/日/时，不再单设「八」页（理由见 ui.h 里
+     * ui_page 的注释）。 */
     if (a->lunar_ok) {
         char gz[16];
         lunar_year_ganzhi(a, gz, sizeof gz);
@@ -316,7 +316,7 @@ static void page_today(const ui_app *a, const ui_theme *t)
                    &ui_font_s, t->fg, buf);
     }
     if (a->pillars_ok) {
-        /* ⚠️ 8 字节够：ganzhi_str 只写「干」+「支」= 2 个全角字 = 6 B + NUL。
+        /* 注意：8 字节够：ganzhi_str 只写「干」+「支」= 2 个全角字 = 6 B + NUL。
          *    写成 16 本身没错，但**下面拼整行的 buf[64] 就会报截断** ——
          *    GCC 按声明尺寸算最坏情况：4×15+3 个全角字 = 72 > 64。
          *    声明成实际契约的大小，编译器就能证明放得下（4×7+12 = 40）。 */
@@ -336,10 +336,10 @@ static void page_today(const ui_app *a, const ui_theme *t)
     /* 视黄经不在这页显示 —— 它和农历行挤在一起，而且太阳页已经有了。
      * 1.8" 的屏上，「少一行、留出呼吸」比「多一个数」重要。
      *
-     * ⚠️ 这一页现在的纵向账（128 px）：顶栏 13 + 白露 20 + 农历/干支 27 +
+     * 注意：这一页现在的纵向账（128 px）：顶栏 13 + 白露 20 + 农历/干支 27 +
      * 进度条 3 + 月相块 43 ≈ 106，只剩 ~22 px 分给五处留白。所以下面这些
      * 0.0x 的数是**互相咬着**的：动一个就得把这条链上的其它几个一起挪，
-     * 改完务必渲出来看一眼（`./sim --dump`），别只看代码。 */
+     * 改完必须渲染检查（`./sim --dump`），不能只看代码。 */
 
     /* --- 本节气已过多少 --- */
     {
@@ -399,7 +399,7 @@ static void page_lunar(const ui_app *a, const ui_theme *t)
     }
 
     /* 顶栏：本月 + 干支年。右上是「大/小」—— 30 天叫大月、29 天叫小月。
-     * ⚠️ 这一页整页都是农历，所以年要用**农历年**那个干支，不是年柱
+     * 注意：这一页整页都是农历，所以年要用**农历年**那个干支，不是年柱
      * （见 lunar_year_ganzhi 上面那段）。 */
     snprintf(title, sizeof title, "农历 %s%s月（%s）",
              a->lunar.is_leap ? "闰" : "", lunar_month_name(&a->lunar),
@@ -431,7 +431,7 @@ static void page_lunar(const ui_app *a, const ui_theme *t)
 
         /* 当天是本月第几天（1-based）；不在本月就是 0。
          *
-         * ⚠️ 这里**故意不用 civil_jd()**：网格本身是库按 `jd_ut + offset`
+         * 注意：这里**故意不用 civil_jd()**：网格本身是库按 `jd_ut + offset`
          * 归日算出来的（sf_cal_from_instant_ut），高亮必须跟库用同一个口径，
          * 否则午夜前后 DUT1 那 0.9 秒里高亮会和网格错开一格。
          * 页面顶栏的钟表读数反过来该用真民用时 —— 两处的基准本来就不一样。 */
@@ -458,7 +458,7 @@ static void page_lunar(const ui_app *a, const ui_theme *t)
 
             if (is_today) ui_fill((ui_rect){ cx, cy, cw, gh }, t->accent);
 
-            /* ⚠️ 12 不是 4：`%d` 的最坏情况（11 位 + NUL）要 12 字节才装得下，
+            /* 注意：12 不是 4：`%d` 的最坏情况（11 位 + NUL）要 12 字节才装得下，
              * 而 GCC 看不到 day 的定义域。实际内容最多两位。 */
             char num[12];
             snprintf(num, sizeof num, "%d", day);
@@ -536,7 +536,7 @@ static void page_terms(const ui_app *a, const ui_theme *t)
             row_px(t, ry, row_h, r->name, "--", "--", 0, t->dim, t->dim, &ui_font_m);
             continue;
         }
-        /* ⚠️ 事件时刻要先**四舍五入到分**再拆 —— 历书给的节气时刻是四舍五入
+        /* 注意：事件时刻要先**四舍五入到分**再拆 —— 历书给的节气时刻是四舍五入
          * 到分的，直接截断会让 2026 年 24 个节气里有 13 个早显示一分钟
          * （大寒 9:44:55.8 会显示成 9:44，历书是 9:45）。理由见
          * ui_jd_round_to_minute 的注释。日期也跟着一起用取整后的值，
@@ -545,7 +545,7 @@ static void page_terms(const ui_app *a, const ui_theme *t)
         fmt_date(d, sizeof d, lt);
         fmt_time(tm, sizeof tm, lt);
 
-        /* ⚠️ 两个比较都要先判 cur_row >= 0。cur_row 是 -1 表示「这一年不是今年，
+        /* 注意：两个比较都要先判 cur_row >= 0。cur_row 是 -1 表示「这一年不是今年，
          * 没有当前节气」—— 而 k == cur_row + 1 在 cur_row = -1 时正好是 k == 0，
          * 于是**每一年**的第一行（小寒）都会被误标成「下一个」。 */
         if (cur_row >= 0 && k == cur_row) {
@@ -572,8 +572,8 @@ static void page_phases(const ui_app *a, const ui_theme *t)
     /* 标出「下一个还没到的」—— 一整年 20 多行，没有这个锚点不好找现在在哪 */
     int cur_row = -1;
     if (a->view_year == local_year(a)) {
-        /* ⚠️ 跟 a->jd 比（两边都是 TT）。原来写成 sf_tt_to_ut(a->jd) 是拿
-         * UT1 比 TT，差 ΔT ≈ 69 秒 —— 事件正好落在「现在」前后一分钟时选错行。
+        /* 注意：与 a->jd 比较（两边都是 TT）。若改用 sf_tt_to_ut(a->jd) 则拿
+         * UT1 比 TT，差 ΔT ≈ 69 秒 —— 事件正好落在「现在」前后一分钟时会选错行。
          * 表是时间序，所以第一个「还没到」的就是下一个。 */
         for (int k = 0; k < a->year_phase_n; k++)
             if (a->year_phase[k].jd_tt > a->jd) { cur_row = k; break; }
@@ -668,11 +668,11 @@ static void page_sun(const ui_app *a, const ui_theme *t)
 
     /* 观者位置放在最下面一行 —— 不然算出来的出没时刻没有参照 */
     {
-        /* ⚠️ 一行里塞「位置 + 均时差」会超过 160 px 被右边裁掉
+        /* 注意：一行里塞「位置 + 均时差」会超过 160 px 被右边裁掉
          * （实测 162 px，第一个字符整个没了）。拆成左右两段各自对齐，
          * 长度就互不叠加了。 */
-        /* ⚠️ 这里是**一位小数**，跟设置页那个两位小数的编辑器不同步 —— 是
-         * 故意的，不是漏改。拆成两段之后留给这一段的钱只有约 103 px
+        /* 注意：这里是**一位小数**，跟设置页那个两位小数的编辑器不同步 ——
+         * 属有意为之。拆成两段之后留给这一段的空间只有约 103 px
          * （右段最宽 `-16.4分` = 47 px，从 155 往左到 108），而实测宽度：
          *   `39.90N 116.41E` =  98 px  ✓（北京，还差 5 px）
          *   `-39.90S -116.41W` = 112 px ✗（南北美那种负纬负经，压到均时差上）
@@ -689,9 +689,9 @@ static void page_sun(const ui_app *a, const ui_theme *t)
     }
 }
 
-/* ⚠️ 这里原来有「页 6：八（四柱）」：pillar_chars / kv_line / page_pillars
- * 三块。整页搬进主页第一行下面了（见 page_today），三个函数一并删掉 ——
- * kv_line 和 pillar_chars 只被那一页用，留着就是 -Wunused-function。 */
+/* 四柱的展示已并入主页第一行下面（见 page_today），不再单设一页。若重新
+ * 引入 pillar_chars / kv_line 这类只服务单独一页的辅助函数，在只有一处
+ * 使用时会触发 -Wunused-function。 */
 
 /* 名字照抄 tools 项目里气朔那一套（见 ui.h 的注释），160 px 放不下全称的
  * 用短名。对照表：
@@ -715,9 +715,9 @@ static void page_sun(const ui_app *a, const ui_theme *t)
  *                                 历史定气 · UTC+8 日界） */
 static const char *const BASIS_NAMES[3]   = { "钟表时间", "平太阳时", "真太阳时" };
 static const char *const RAT_NAMES[3]     = { "23点换日", "晚子用当日", "时干随次日" };
-/* ⚠️ 这三张表是**按枚举值索引**的，不是按屏幕上的顺序 —— 库的 mode 是
+/* 注意：这三张表是**按枚举值索引**的，不是按屏幕上的顺序 —— 库的 mode 是
  * HISTORICAL=0 / LOCAL_ASTRONOMICAL=1 / CHINA_STANDARD_ASTRONOMICAL=2，
- * 所以左右翻的时候是「中国古历 → 当地天文 → 中国天文」。别照直觉排。 */
+ * 所以左右翻的时候是「中国古历 → 当地天文 → 中国天文」。不得照直觉排。 */
 static const char *const CALMODE_NAMES[3] = { "中国古历", "当地天文", "中国天文" };
 static const char *const BOUNDARY_NAMES[2] = { "按标准经线", "按当地经度" };
 static const char *const PILLAR_HIST_NAMES[3] = { "跟历法", "精确定气", "历史定气" };
@@ -741,17 +741,17 @@ static const char *const SET_LABELS[UI_SET_COUNT] = {
 
 /* 精度档的名字**按枚举值索引**（LOW=0 / MED=1 / HIGH=2，跟 sf_qishuo_accuracy 同序）。
  *
- * 这里刻意不借 JS 的 fast/mid/accurate：上游那三个是**三个不同算法**，我们这三档
- * 是同一个求解器的三种截断（取预算表前 N 项），借名字会让人以为「我们的 low
+ * 这里刻意不借 JS 的 fast/mid/accurate：上游那三个是**三个不同算法**，本库这三档
+ * 是同一个求解器的三种截断（取预算表前 N 项），借名字会让人以为「本库的 low
  * 就是上游的 fast」。实测正好相反 —— 上游 fast 对紫金山那张历书表 24/24 全对，
- * 我们截到 LOW 只有 9/24。见 sf_qishuo.h 头注「与 JS 的差异 1」。
+ * 本库截到 LOW 只有 9/24。见 sf_qishuo.h 头注「与 JS 的差异 1」。
  *
  * 屏上只写一个字：行标签「气朔精度」已经说清它是什么，再挂个「全量/截断」
  * 在 96 px 的值列里只会挤。各档的实际误差数字（低 27 s / 中 3.2 s / 高 0）
- * 见 sf_qishuo.h 和 sim/README。 */
+ * 见 sf_qishuo.h 和 README.md。 */
 static const char *const ACC_NAMES[3] = { "低", "中", "高" };
 
-/* ⚠️ 度数是**两位小数**，跟档位表对齐：0.01° 那一档按一下值列必须动一个字
+/* 注意：度数是**两位小数**，跟档位表对齐：0.01° 那一档按一下值列必须动一个字
  * （ui_app.c 的 STEP_DEG）。写成一位小数的话那一档看着完全没反应。
  * 两位的宽度：`116.41°E` = 8 个半角 ≈ 56 px，右对齐到 0.95 时左边缘在
  * 约 96 px 处，而左边标签最多 4 个汉字（「当地经度」）到 56 px 就完了。 */
@@ -809,12 +809,12 @@ static void page_settings(const ui_app *a, const ui_theme *t)
     /* 顶栏右上：光标这一行有步长可言时显示**「方向 + 步长」**，否则显示
      * 虚拟时刻。
      *
-     * 为什么必须显示：方向和步长现在是两个独立按键，不显示的话你根本不知道
-     * 按下去会动多少、往哪边动。而方向键（K8）按下去除了这里没有任何反馈。
+     * 必须显示的理由：方向和步长是两个独立按键，不显示则无法预知按下去会
+     * 动多少、往哪边动。而方向键（K8）按下去除了这里没有任何反馈。
      *
-     * 为什么可以顶掉时刻：数值行自己的值就是反馈（时区那行的值就是偏移本身）；
+     * 可以顶掉时刻的理由：数值行自己的值就是反馈（时区那行的值就是偏移本身）；
      * 而枚举行没有步长，右上自然回到时刻 —— 那正是「换个口径看时柱变没变」
-     * 唯一的地方。两边各得其所。 */
+     * 唯一的地方。 */
     /* 24 不是 16：`%02d:%02d` 最坏 11×2+1 = 23（GCC 看不到时分是 0..59）。
      * 实际内容「08:00」5 个字符。 */
     char right[24];
@@ -846,10 +846,10 @@ static void page_settings(const ui_app *a, const ui_theme *t)
         const int ry = top + i * row_h;
         const int inert = ui_app_setting_inert(a, row);
         const int sel   = (row == a->set_row);
-        /* 三种状态三种画法，别混：
+        /* 三种状态三种画法，不得混用：
          *   普通行        什么都不画
-         *   光标行        整行反色 —— 「左右键改的是这一行」
-         *   光标 + 失效行  只描个框、值保持暗色 —— 「你在这儿，但这行现在不归你管」
+         *   光标行        整行反色 —— 表示「左右键改的是这一行」
+         *   光标 + 失效行  只描个框、值保持暗色 —— 表示光标在此但该行不可调
          * 光标压在失效行上时若照样反色，就完全看不出它按不动了。 */
         const int solid = sel && !inert;
 
@@ -882,7 +882,7 @@ static void page_settings(const ui_app *a, const ui_theme *t)
  * 功能选择页（feature == -1 时显示）
  *
  * 两级页面的**第一级**：一张卡片一个功能。上下左右**都**移动高亮 ——
- * 只有两个功能，两对键等价，但都认省得猜（用户要的就是「上下左右滑」）。
+ * 只有两个功能，两对键等价，但两对都接受，以免用户猜测。
  * ================================================================== */
 static void page_pick(const ui_app *a, const ui_theme *t)
 {
@@ -901,7 +901,7 @@ static void page_pick(const ui_app *a, const ui_theme *t)
         const int sel = (i == a->pick);
         const ui_rect r = ui_box_to_rect(UI_BOX(0.12f, y, 0.76f, 0.245f));
         /* 选中整块反色；未选中只描细框。描边两边都画 —— 反色块在纸白底上
-         * 本来就够醒目，框是给夜间主题补轮廓的，顺手统一了。 */
+         * 本来就够醒目，框是给夜间主题补轮廓的，两处统一。 */
         if (sel) ui_fill(r, t->accent);
         ui_frame(r, sel ? t->accent : t->rule);
 
@@ -916,16 +916,16 @@ static void page_pick(const ui_app *a, const ui_theme *t)
  * 八字 · 出生信息页
  *
  * **完全复用设置页那套三键**（上下列 / OK 调值 / MENU 换步长 / ACT 切 ±）。
- * 不新造输入控件 —— 这个 UI 里没有任何光标/软键盘的基础设施，见 sim/README。
+ * 不新造输入控件 —— 这个 UI 里没有任何光标/软键盘的基础设施，见 README.md。
  * ================================================================== */
 static const char *const BIRTH_LABELS[UI_BIRTH_ROW_COUNT] = {
     "出生年", "月", "日", "时", "分", "性别", "出生地时区", "出生地经度"
 };
 
 /* 步长的单位。跟设置页同一个做法：**单位不同的行给不同的后缀**。
- * ⚠️「分」和「m」必须分开 —— 两个都是分钟，但一个是钟面读数、一个是时区
+ * 注意：「分」和「m」必须分开 —— 两个都是分钟，但一个是钟面读数、一个是时区
  * 偏移，混用就分不清顶栏那个 `+15?` 改的是哪一行。偏移的 m 跟设置页
- * 「显示时区」那个 m 是同一个人。（性别那行没有步长，空着；
+ * 「显示时区」那个 m 同含义。（性别那行没有步长，空着；
  * 经度是 `°`，跟设置页「经度」那个同一个。） */
 static const char *const BIRTH_STEP_UNIT[UI_BIRTH_ROW_COUNT] = {
     "年", "月", "日", "时", "分", "", "m", "°"
@@ -946,7 +946,7 @@ static void birth_value(const ui_app *a, int row, char *b, size_t n)
                           : a->gender == SF_BAZI_GENDER_FEMALE ? "女" : "未选");
         break;
     case UI_BIRTH_OFFSET: {
-        /* ⚠️ 显示**生效值**（`ui_app_bazi_offset`），不是用户存的那个：
+        /* 注意：显示**生效值**（`ui_app_bazi_offset`），不是用户存的那个：
          * 时区被八字历法锁住时生效值是 +480，值列照实说 —— 跟万年历
          * 「显示时区」行锁上时显示 +8:00 是同一个做法。 */
         const int m = ui_app_bazi_offset(a);
@@ -957,7 +957,7 @@ static void birth_value(const ui_app *a, int row, char *b, size_t n)
     case UI_BIRTH_MERIDIAN:
         /* 显示**生效值**，跟设置页「经度」那一行同一个格式化（2 位小数）——
          * 0.01° 那一档不动小数点后两位就等于没动。（这一行的 `bazi_meridian_set
-         * 为 0` 时是播种值 `偏移/4`，照实显示它，不装作"没设过"。） */
+         * 为 0` 时是播种值 `偏移/4`，照实显示它，不表示"没设过"。） */
         fmt_deg(b, n, a->bazi_cal.calendar_meridian_deg);
         break;
     default: snprintf(b, n, "?"); break;
@@ -966,7 +966,7 @@ static void birth_value(const ui_app *a, int row, char *b, size_t n)
 
 static void page_birth(const ui_app *a, const ui_theme *t)
 {
-    /* ⚠️ 这一页有 **8 行**（全站最长的一页），直接借用 UI_LIST_ROW_H（17 px）
+    /* 注意：这一页有 **8 行**（全站最长的一页），直接借用 UI_LIST_ROW_H（17 px）
      * 会算成 13 + 8×17 = 149 ≫ 128，**最后两行压到页码点上**。
      * 13 px 是 8 行放得下的最大整数行高：(128 − 13 − 10) / 8 = 13.1。
      * 字号是 ui_font_s（行高 12）—— 13 的框装 12 的字，上下各剩 0.5 px，
@@ -978,12 +978,12 @@ static void page_birth(const ui_app *a, const ui_theme *t)
      *
      *   1. 「无此日期」—— 警告必须有地方说，而这一页 8 行已经把纵向占满，
      *      塞在行间会压到页码点。而且这个警告**恰恰是在日/月那两行调值时
-     *      造出来的**，那正是最需要看见它的一刻，不能让给步长。
+     *      产生的**，那正是最需要看见它的时刻，不能让给步长。
      *   2. 「方向 + 步长」（如 `+5日`）—— 跟设置页同一个理由：方向和步长是
-     *      两个独立按键（K8 / K7），不显示的话你不知道按 K5 会动多少、往哪
+     *      两个独立按键（K8 / K7），不显示则无法预知按 K5 会动多少、往哪
      *      边动，而 K7/K8 按下去除了这里没有任何反馈。
      *   3. 完整的出生日期 —— 光标落在**没有步长的行**（性别）上时才轮到它。
-     *      平时它其实是冗余的：年/月/日三个分量就在下面三行里各占一行。 */
+     *      平时它是冗余的：年/月/日三个分量就在下面三行里各占一行。 */
     char right[32];
     const double mag = ui_app_step_magnitude(a);
     if (!a->birth_valid)
@@ -1018,7 +1018,7 @@ static void page_birth(const ui_app *a, const ui_theme *t)
         /* 时区锁定时换标签：「出生地时区」→「时区锁定」。上游那边是在表单
          * 底下印一行注（「中国历史历法仅按 UTC+8 生效，时区已锁定」），
          * 160 px 没地方印注 —— 把意思塞进标签，宽度一个字没变。
-         * ⚠️ 这跟万年历「显示时区」→「时区锁定」是**两处不同的锁**：
+         * 注意：这跟万年历「显示时区」→「时区锁定」是**两处不同的锁**：
          * 判据来自两套独立的历法口径。 */
         snprintf(label, sizeof label, "%s",
                  (inert && row == UI_BIRTH_OFFSET) ? "时区锁定"
@@ -1077,8 +1077,7 @@ static void bset_value(const ui_app *a, int row, char *b, size_t n)
 }
 
 /* 步长的单位：**这一页整页都是枚举**（没有数值行），所以全是空串 ——
- * 顶栏那一格于是总落到「显示虚拟时刻」那一支。经度搬走之前这里是
- * `"", "", "", "°", "", ""`。 */
+ * 顶栏那一格于是总落到「显示虚拟时刻」那一支。 */
 static const char *const BSET_UNIT[UI_BSET_COUNT] = {
     "", "", "", "", ""
 };
@@ -1087,9 +1086,10 @@ static void page_bset(const ui_app *a, const ui_theme *t)
 {
     /* 顶栏右上跟万年历设置页同一条规矩：光标这一行有步长就显示
      * 「方向 + 步长」（`+0.01°`），否则回到显示虚拟时刻。
-     * ⚠️ 虚拟时刻在这一页是**万年历那个钟**（八字这边没有「现在」的概念 ——
+     * 注意：虚拟时刻在这一页是**万年历那个钟**（八字这边没有「现在」的概念 ——
      * 出生读数跟此刻无关），所以它显示的是「现在几点」，不是「排的是哪一刻」。
-     * 有点串味，但这一格不显示步长时总得有东西填，而它是全局唯一的每秒读数。 */
+     * 语义上略有重叠，但这一格不显示步长时总得有东西填，而它是全局唯一的
+     * 每秒读数。 */
     /* 24 不是 16：`%02d:%02d` 最坏 11×2+1 = 23（GCC 看不到时分是 0..59）。
      * 实际内容「08:00」5 个字符。 */
     char right[24];
@@ -1138,13 +1138,13 @@ static void page_bset(const ui_app *a, const ui_theme *t)
  *
  * 每行三段（宽度都是实测的，ui_font_s = latin12/cjk12）：
  *   层名 24 │ 干支 24 │ …右对齐… 副标签
- * ⚠️ 「流年小运」是 5 个汉字 = 48 px，那行的副标签就只写年份（28 px），
+ * 注意：「流年小运」是 5 个汉字 = 48 px，那行的副标签就只写年份（28 px），
  * 不然 4+48+8+24+69 = 153 会顶到边（152 是可用宽度）。
  * ================================================================== */
 static const char *const LUCK_LEVEL_NM[UI_LUCK_LEVELS] = {
     "大运", "流年", "流月", "流日", "流时"
 };
-/* 流时那层的十二时辰名。⚠️ 0 = 子时（**23 时起**，不是 0 时起）。 */
+/* 流时那层的十二时辰名。注意：0 = 子时（**23 时起**，不是 0 时起）。 */
 static const char *const HOUR_NM[12] = {
     "子时", "丑时", "寅时", "卯时", "辰时", "巳时",
     "午时", "未时", "申时", "酉时", "戌时", "亥时"
@@ -1153,9 +1153,9 @@ static const char *const HOUR_NM[12] = {
 static void page_luck(const ui_app *a, const ui_theme *t)
 {
     /* ------------------------------------------------------------------
-     * 两处「这一页根本没东西可给你看」——**必须先说清楚再说别的**。
+     * 两处「这一页没有内容可显示」的状态 ——**必须先说明原因**。
      *
-     * 不拦的话这一页就是五行 `—`：八个键只有一个有反应，看着像死机，
+     * 不加拦截时这一页就是五行 `—`：八个键只有一个有反应，看着像死机，
      * 而真正的原因（性别没选 / 出生日期不合法）一个字都没写在屏上。
      * 跟排盘页 `page_chart` 开头那段是同一个写法、**同一套措辞**：
      * 居中的大字说「缺什么」，小字说「去哪补」。
@@ -1184,7 +1184,7 @@ static void page_luck(const ui_app *a, const ui_theme *t)
 
     /* 顶栏右上：**K5 会往哪边走**（＋/−，跟设置页一个写法）＋ 当前是这一层的
      * 第几张。符号在前面是因为它跟设置页的 `+1°` 同一个位置、同一个意思 ——
-     * K8（z）一按就翻过来。没展开任何层时就只剩一个符号（K5 这会儿没得动）。 */
+     * K8（z）一按就翻过来。没展开任何层时只剩一个符号（此时 K5 无作用）。 */
     char right[16] = "";
     const int act = ui_app_luck_active(a);
     if (act >= 0)
@@ -1217,7 +1217,7 @@ static void page_luck(const ui_app *a, const ui_theme *t)
         const int th = ui_font_s.line;
         const int yy = ry + (row_h - th) / 2;
 
-        /* 层名。⚠️ 童限选中时第 1 层叫「流年小运」（上游 :607 也是这么改的） */
+        /* 层名。注意：童限选中时第 1 层叫「流年小运」（上游 :607 也是这么改的） */
         const int childhood0 = (n > 0
             && ui_app_luck_count(a, UI_LUCK_DAYUN) > a->dayun_n
             && a->luck_sel[UI_LUCK_DAYUN] == 0);
@@ -1237,7 +1237,7 @@ static void page_luck(const ui_app *a, const ui_theme *t)
         if (!ui_app_luck_get(a, lv, a->luck_sel[lv], &e)) continue;
 
         /* 干支（童限那张写「童限」）。染色规则跟柱盘一致：按本气五行。
-         * ⚠️ 起点**按层名的实际宽度算**：两字层名是 24，而「流年小运」是 48 ——
+         * 注意：起点**按层名的实际宽度算**：两字层名是 24，而「流年小运」是 48 ——
          * 写死 `xl + 32` 的话童限那一行的「流年小运」会直接压在干支上
          * （渲出来才看见：`流年小庚辰`）。 */
         {
@@ -1260,7 +1260,7 @@ static void page_luck(const ui_app *a, const ui_theme *t)
         }
 
         /* 副标签（右对齐）：各层说各层的话 */
-        /* ⚠️ 48 不是 24：`%d` 单个最坏 11 字节，四个 11×4+3 = 47。
+        /* 注意：48 不是 24：`%d` 单个最坏 11 字节，四个 11×4+3 = 47。
          *    实际内容最长是「3/8 19-28」10 个字符，但 GCC 看不到定义域。 */
         char sub[48] = "";
         switch (lv) {
@@ -1304,13 +1304,13 @@ static void page_luck(const ui_app *a, const ui_theme *t)
  *
  * 列数随 OK **递进**：四柱(4) → +大运(5) → +流年(6)。
  *
- * ⚠️ **列宽是这一页的硬约束**（已算过）：
+ * 注意：**列宽是这一页的硬约束**（已算过）：
  *    4 列 40 px / 5 列 32 px / 6 列 26.6 px
  * 6 列时 12 px 的字只放得下**两个** —— 「十神」刚好（24 px），而藏干
  * 三个字要 36 px 放不下，所以藏干那行走 8 px 的 ui_font_xs（3×8 = 24 px）。
  * ================================================================== */
 typedef struct {
-    /* ⚠️ 柱名缓冲**必须放得下 6 字节 + NUL**：「大运」是 2 个汉字 = 6 字节。
+    /* 注意：柱名缓冲**必须放得下 6 字节 + NUL**：「大运」是 2 个汉字 = 6 字节。
      * 给 6 会把它切在半路，剩半个 UTF-8 序列解码成 U+8FC0 那种垃圾 ——
      * 而 `--dump` 只会报 12 个漏字、屏幕上是一个空心框，很难联想到是
      * 「缓冲小了一字节」。流年那列放年份（4 位数字），这个尺寸也够。 */
@@ -1350,7 +1350,7 @@ static void col_fill(chart_col *c, sf_ganzhi pillar, const sf_bazi_chart *ch,
 
 static void page_chart(const ui_app *a, const ui_theme *t)
 {
-    /* ⚠️ 48 不是 32：`%d/%d %d-%d` 四个 %d 的最坏情况是 11×4+3 = 47，
+    /* 注意：48 不是 32：`%d/%d %d-%d` 四个 %d 的最坏情况是 11×4+3 = 47，
      * GCC 看不到定义域，IDF 下按错误算。实际内容最长「3/8 19-28」。 */
     char right[48] = "";
 
@@ -1368,7 +1368,7 @@ static void page_chart(const ui_app *a, const ui_theme *t)
     /* --- 组列：左边是**链上最深的两层流运柱**（从深到浅），然后本命四柱 ---
      * 与网页的 #flow-pillars 排在 #natal-pillars **之前**同一个顺序。
      *
-     * ⚠️ 只有两格：6 列是 160px 的硬上限（7 列 = 22.8px/列，而「十神」两个字
+     * 注意：只有两格：6 列是 160px 的硬上限（7 列 = 22.8px/列，而「十神」两个字
      * 要 24px、藏干三个字也要 24px，都会撞）。所以流月/流日/流时**不上柱盘**，
      * 它们只在「运限」页那几行里各占一行。 */
     chart_col cols[6];
@@ -1400,15 +1400,14 @@ static void page_chart(const ui_app *a, const ui_theme *t)
 
     /* --- 顶栏：左「八字 · 乾造/坤造」，右给当前大运的进度 ---
      *
-     * ⚠️ 没选性别时**如实说「未选」**，右边提示去选。原来这里是
-     * `gender == MALE ? 乾造 : 坤造` —— -1 掉进 else，于是没选性别的盘
-     * 被写成**坤造**，而大运/流年那两列又因为算不出顺逆而上不来：屏上
-     * 是一张假的坤造四柱。当初把性别默认成「未选」要防的就是这个，
-     * 结果在盘面这头漏了。 */
+     * 注意：没选性别时**如实显示「未选」**，右边提示去选。不得写成
+     * `gender == MALE ? 乾造 : 坤造` —— -1 会掉进 else，使没选性别的盘
+     * 被标成**坤造**，而大运/流年那两列又因算不出顺逆而缺失：屏上
+     * 将是一张假的坤造四柱。性别默认「未选」正是为防此。 */
     const int no_gender = (a->gender != SF_BAZI_GENDER_MALE
                            && a->gender != SF_BAZI_GENDER_FEMALE);
     if (!no_gender && a->dayun_n > 0) {
-        /* 第几步 · 虚岁区间。⚠️ 童限选中时第 0 层的柱换成了小运，
+        /* 第几步 · 虚岁区间。注意：童限选中时第 0 层的柱换成了小运，
          * 但进度说的还是**那一步大运**（上游的「/8」也是这么数的）。 */
         const int ch = (a->luck_sel[UI_LUCK_DAYUN] == 0
                         && ui_app_luck_count(a, UI_LUCK_DAYUN) > a->dayun_n);
@@ -1471,13 +1470,13 @@ static void page_chart(const ui_app *a, const ui_theme *t)
                 break;
             }
             case 4: {  /* 藏干：8 px，只画**实际个数**那几个 */
-                /* ⚠️ 缓冲按**字节**算：一个汉字 3 字节，最多 3 个藏干 = 9 字节
+                /* 注意：缓冲按**字节**算：一个汉字 3 字节，最多 3 个藏干 = 9 字节
                  * + NUL。给 16 是留余量，不是为了好看。 */
                 char s[16] = "";
                 for (int j = 0; j < c->n_hidden; j++) {
                     const char *nm = SF_HEAVENLY_STEMS[c->hidden[j]];
                     const size_t l = strlen(s);
-                    /* ⚠️ 余量要**显式判**：写成 snprintf(s+l, sizeof s - l, ...)
+                    /* 注意：余量要**显式判**：写成 snprintf(s+l, sizeof s - l, ...)
                      * 在 l 顶到 sizeof s 时是往 0 字节的区域写字，GCC 报
                      * 「可能在最后一个格式符之前截断」（IDF 下是错误）。
                      * CAPACITY 是 3、每个藏干 3 字节，本来就装得下 ——
@@ -1499,8 +1498,8 @@ static void page_chart(const ui_app *a, const ui_theme *t)
     }
 
     /* --- 最后一行：五行统计，**整行居中、逐段染色** ---
-     * ⚠️ 口径：只数四柱的**天干 + 地支八个本气**，不含藏干 —— 含藏干的话
-     * 同一个字会被数好几遍，各家口径也不一。这条写进 sim/README。 */
+     * 注意：口径：只数四柱的**天干 + 地支八个本气**，不含藏干 —— 含藏干的话
+     * 同一个字会被数好几遍，各家口径也不一。这条写进 README.md。 */
     {
         int cnt[5] = { 0, 0, 0, 0, 0 };
         const sf_ganzhi natal[4] = {
@@ -1540,7 +1539,7 @@ void ui_render(ui_app *a)
 
     ui_clear(t->bg);
 
-    /* ⚠️ **先看 feature 再看 page** —— page 是两个功能共用的裸 int，
+    /* 注意：**先看 feature 再看 page** —— page 是两个功能共用的裸 int，
      * UI_BAZI_PAGE_CHART(1) 跟 UI_PAGE_LUNAR(1) 是同一个值。 */
     if (a->feature < 0) {
         page_pick(a, t);

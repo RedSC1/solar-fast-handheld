@@ -3,9 +3,10 @@
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_NC_1.0.0-lightgrey.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0)
 [![Source Available](https://img.shields.io/badge/Source-Available-blue.svg)]()
 
-`solar-fast-handheld` 是基于 [`solar-fast`](https://github.com/your-username/solar-fast) 核心计算引擎打造的**掌上天文历算仪终端与便携 UI 系统**。
+`solar-fast-handheld` 是 `solar-fast` 计算引擎的掌上终端与 UI 层。
 
-项目面向 1.8" (128×160 ST7735S) 彩色液晶屏设计，包含完整的便携 UI 渲染引擎、按键状态机、汉字字模库以及 macOS Cocoa / SDL2 桌面模拟器，可直接编译并在电脑或嵌入式开发板上运行。
+面向 1.8" ST7735S 彩色液晶屏（原生 128×160 竖屏，本 UI 按 **160×128 横屏**使用），
+包含 UI 渲染、按键状态机、汉字字模库，以及 macOS Cocoa 桌面模拟器。
 
 ---
 
@@ -30,13 +31,13 @@
 
 本终端应用依赖 `solar-fast` 核心计算库。
 
-* **开发推荐**：克隆本仓库到与 `solar-fast` 相同的父级目录下：
+* 克隆本仓库到与 `solar-fast` 相同的父级目录下：
   ```bash
   Developer/
   ├── solar-fast/           # 天文/历法核心计算库 (MPL-2.0)
   └── solar-fast-handheld/  # 掌上终端与 UI 系统 (PolyForm NC 1.0.0)
   ```
-* 亦可通过 Git Submodule 或 CMake 引入。
+* 亦可通过 Git Submodule 引入。
 
 ---
 
@@ -48,16 +49,36 @@ make
 ./sim
 ```
 
-### Linux / macOS (SDL2 后端)
-```bash
-make BACKEND=sdl
-./sim
-```
+### SDL2 后端（尚未提供）
+
+`host_sdl.c` 未随本仓库发布，`make BACKEND=sdl` 会显式报错。
+当前可用的宿主后端只有 macOS Cocoa。
 
 ### 模拟器按键操作
-* `W / A / S / D` 或 `方向键`：页面切换与光标导航
-* `J / K`：数值调节 / 切换精度与模式
-* `Space / Enter`：确认 / 返回主页
+
+**面板按键 K1–K8**（数字键 `1`–`8` 与别名键完全等价）：
+
+| 按钮 | 别名键 | 功能 |
+|---|---|---|
+| K1 | `W` / `↑` | 上 |
+| K2 | `S` / `↓` | 下 |
+| K3 | `A` / `←` | 左 |
+| K4 | `D` / `→` | 右 |
+| K5 | `Space` / `Return` | 确认 |
+| K6 | `Esc` / `Delete` | 返回 |
+| K7 | `Tab` / `M` | 菜单 |
+| K8 | `Z` | 动作 |
+
+**宿主专用键**（不属于那 8 个按钮）：
+
+| 键 | 功能 |
+|---|---|
+| `[` / `]` | 时间 −1 / +1 天（按住可自动重复） |
+| `\` | 复位时间 |
+| `-` / `=` 或 `+` | 缩放 −1 / +1 |
+
+**页面级覆盖**：二十四节气页与合朔望月页把 K5/K7/K8 重载为「编辑年份」三键
+（K5 不再是「回主页」，K8 不再是「日夜主题」），方向键与翻页键不受影响。
 
 ---
 

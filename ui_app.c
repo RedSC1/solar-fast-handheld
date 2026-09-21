@@ -20,29 +20,30 @@
  * 时间换算（Meeus 第 7 章）
  *
  * 只做**日历字段 ↔ JD** 这一步。TT / UT1 / UTC 之间的换算一律用库的
- * （sf_utc_to_tt / sf_tt_to_utc / sf_tt_to_ut）—— 这一层以前自带一份
- * Espenak–Meeus ΔT，跟库的 IERS 年表差 5.9 秒，屏上的钟会快 6 秒。
- * 一份实现，两处别再各写一遍。
+ * （sf_utc_to_tt / sf_tt_to_utc / sf_tt_to_ut）。
+ *
+ * 本层不得自带 ΔT 实现：Espenak–Meeus ΔT 与库的 IERS 年表差 5.9 秒，
+ * 屏上的钟会快 6 秒。同一份换算只实现一处。
  *
  * UI 的整年气朔支持 SF_QISHUO_RANGE_START_YEAR..END_YEAR，因此这里统一使用
  * 前推格里历（astronomical year numbering，含 0 年）。正反换算必须同口径：
- * 不能一边全程格里历、另一边在 1582 年以前偷偷切成儒略历。
+ * 不得一边全程格里历、另一边在 1582 年以前切成儒略历。
  * ------------------------------------------------------------------ */
 static double jd_round_to_second(double jd)
 {
     return floor(jd * 86400.0 + 0.5) / 86400.0;
 }
 
-/* 事件时刻（节气/朔望/出没）要**四舍五入到分**再显示。
+/* 事件时刻（节气/朔望/出没）必须**四舍五入到分**再显示。
  *
- * 为什么不能像钟表那样截断：历书（紫金山天文台那类）给的节气时刻是
- * **四舍五入到分**的。2026 年 24 个节气里，有 13 个落在 :30 秒之后 ——
- * 截断就整体早显示一分钟。实测（experimental/ 里的探针对过 PMO 那张表）：
+ * 不得像钟表那样截断：历书（紫金山天文台那类）给的节气时刻是**四舍五入到分**
+ * 的。2026 年 24 个节气里，有 13 个落在 :30 秒之后 —— 截断就整体早显示一分钟。
+ * 实测（离线探针，未随库发布；对照 PMO 那张表）：
  *   大寒 9:44:55.8  → 历书 9:45，截断显示 9:44
  *   清明 2:39:59.6  → 历书 2:40，截断显示 2:39
- * 当年就是「夏至 16:24:30.5」这种恰好压在 :30 上的最脆 —— 只差 0.55 秒。
+ * 临界情形是「夏至 16:24:30.5」这种恰好压在 :30 上的时刻，只差 0.55 秒。
  *
- * ⚠️ 只给**事件列表**用。屏上那个走动的钟（今页的 HH:MM）必须截断：
+ * 注意：只给**事件列表**用。屏上那个走动的钟（今页的 HH:MM）必须截断：
  * 16:24:40 的钟面读数就是 16:24，读成 16:25 是错的。 */
 double ui_jd_round_to_minute(double jd)
 {
@@ -63,7 +64,7 @@ double ui_jd_from_calendar(int y, int mo, int d, int h, int mi, double s)
 void ui_calendar_from_jd(double jd, int *y, int *mo, int *d,
                          int *h, int *mi, int *s)
 {
-    /* 先整秒对齐，后面分解就不会出现 60 秒进位那种烂事 */
+    /* 先整秒对齐，后续分解不会出现 60 秒进位 */
     const double j = jd_round_to_second(jd) + 0.5;
     const double z = floor(j);
     const double f = j - z;
@@ -95,9 +96,9 @@ void ui_calendar_from_jd(double jd, int *y, int *mo, int *d,
 /* ------------------------------------------------------------------
  * 月相盘朝向
  *
- * 屏上的月相要画成**观测者抬头看到的那个样子**：赤道附近月牙会躺着
- * （亮边朝上），南半球跟北半球大致反着。老版本固定「终线竖直、盈在右」，
- * 那是把北天极当成了「上」。
+ * 月相要画成**观测者抬头看到的那个样子**：赤道附近月牙会躺着（亮边朝上），
+ * 南半球跟北半球大致反着。不得固定成「终线竖直、盈在右」——那把北天极当成
+ * 了「上」。
  *
  * 做法是**地平坐标直接投**，不是教科书那套「亮边位置角 χ − 视差角 q」：
  * 后者两个 atan2 加一堆符号约定，镜像方向极易搞反，而且这个库和上游
@@ -106,9 +107,10 @@ void ui_calendar_from_jd(double jd, int *y, int *mo, int *d,
  * 屏幕约定：**上 = 天顶、右 = 方位角增大的方向**（面朝某方位时右手边
  * 就是方位角 +90°，北→东→南→西 全对得上）。
  *
- * ⚠️ 这套东西在 experimental/moon_probe.c 里跟 χ−q 独立对照过：
- * 1392 个样本（6 纬度 × 4 经度 × 约一年）上两条路径吻合到 **0.0000°**，
- * 而且 8 种符号组合里只有唯一一种成立。要动这里的公式，先回去跑那个探针。
+ * 注意：这套东西与 χ−q 在离线探针（未随库发布，原 experimental/moon_probe.c）
+ * 里独立对照过：1392 个样本（6 纬度 × 4 经度 × 约一年）上两条路径吻合到
+ * **0.0000°**，而且 8 种符号组合里只有唯一一种成立。改动这里的公式前，
+ * 先重跑该探针。
  * ------------------------------------------------------------------ */
 
 /* 赤道 → 地平：方位角自北起、向东为正 */
@@ -196,8 +198,8 @@ static int term_index_of(double lon)
     return i;
 }
 
-/* 主页只读当前与下一个节气。旧实现还算未来 24 气、13 朔、13 望，但气/朔
- * 年表早已迁到 year_fill，那 26 个月相没有任何消费者，是纯死计算。 */
+/* 主页只读当前与下一个节气。整年的气/朔由 year_fill 负责，未来 24 气、
+ * 13 朔、13 望在此不再计算，无消费者。 */
 static void rebuild_today_events(ui_app *a)
 {
     const double step = M_PI / 12.0;
@@ -214,28 +216,25 @@ static void rebuild_today_events(ui_app *a)
  * 给一个**公历年**和一组选项，一次拿到这一年的全部节气与指定相位角的月相。
  * **这是库里唯一按公历年的整年入口。**
  *
- * 这一段从前是自己拼的：拿 sf_cal_get_specific_term 一个个求节气、再用
- * MONTH_ORDER 把「春分起算」的索引轮转成 1–12 月，朔望还得自己滚动种子
- * 从 1 月 1 日滚到年底。整段现在已经删掉 —— 事件出来就是时间序，名字直接用
- * sf_qishuo_event_name()，没有任何索引推算，也就没有「跳过一个元素就整体错位」
- * 那种隐患。
+ * 事件出来即时间序，名字直接用 sf_qishuo_event_name()，不做任何索引推算 ——
+ * 也就没有「跳过一个元素就整体错位」那种隐患。
  *
- * 「年」的口径仍跟 tools 的气朔工具一致（按所选时区的 1 月 1 日到 12 月 31 日），
- * 而且现在是真的按**当地**时区切窗口了：老代码那个边界用的是 UT 的 1 月 1 日，
- * 时区根本没进去（+8 区跨年那 8 小时里的事件会被算到隔壁年份）。
+ * 「年」的口径跟 tools 的气朔工具一致（按所选时区的 1 月 1 日到 12 月 31 日），
+ * 且必须按**当地**时区切窗口：边界用 UT 的 1 月 1 日会让时区不生效，
+ * +8 区跨年那 8 小时里的事件会被算到隔壁年份。
  * ------------------------------------------------------------------ */
 
 /* sf_qishuo_year_run 的暂存区。
  *
- * ⚠️ 它要的容量是**上界**，不是实际条数：算完再发现装不下就只能丢掉一部分，
+ * 注意：它要的容量是**上界**，不是实际条数：算完再发现装不下就只能丢掉一部分，
  * 而丢掉的是**发射顺序**而不是时间顺序的子集 —— 那种「部分结果」在时间序上
  * 是错的，所以库宁可整年不给（返回 SF_QISHUO_ERR_CAPACITY），并提醒「先拿
  * NULL/0 问一次大小」。本 sim 的选项组合是固定的，上界因此是常数：
  *
  *     节气页 24×2 = 48；朔望页 2×14 = 28（见 sf_qishuo.c 的 qs_upper_bound）
  *
- * 实际每页写入 24–25 条，多出来的是 API 上界余量。**改选项就要改这个数**
- * （若以后把两页重新合并并开七十二候，上界会变成 176；再往上就用库给的
+ * 实际每页写入 24–25 条，多出来的是 API 上界余量。**改选项要同步改这个数**
+ * （若把两页重新合并并开七十二候，上界会变成 176；再往上就用库给的
  * SF_QISHUO_MAX_EVENTS = 256）；数给少了不会静默错，是整年页**整片空掉**。
  *
  * 放文件级 static 而不是塞进 ui_app：48 条 × 160 字节约 7.5 KB，而
@@ -245,16 +244,16 @@ static sf_qishuo_event g_year_scratch[YEAR_SCRATCH_CAP];
 
 /* 选项从 cal_cfg 投影过去 —— 字段一一对应（见 sf_calendar.h 的 sf_cal_config）。
  *
- * ⚠️ 经线**只在「按当地经度定日界」时才给**。API 会校验这一对组合
+ * 注意：经线**只在「按当地经度定日界」时才给**。API 会校验这一对组合
  * （按固定时区却给了经线 → SF_QISHUO_ERR_MERIDIAN_UNEXPECTED），是照 JS 抄的。
- * 好在 apply_boundary 已经把两者绑好了：非「当地天文」一律压成固定偏移，
- * 所以这里直接照着生效值判就行，不用再推一遍。
+ * apply_boundary 已把两者绑好：非「当地天文」一律压成固定偏移，所以这里直接
+ * 照着生效值判即可，不用再推一遍。
  *
- * 失败一律 `return -1`、表留空 —— 别在里面直接 return，外层还要夹滚动位置。 */
+ * 失败一律 `return -1`、表留空 —— 不得在其中直接 return，外层还要夹滚动位置。 */
 static int year_fill(ui_app *a, int want_terms)
 {
     sf_qishuo_options o;
-    sf_qishuo_options_init(&o);            /* ⚠️ 不能 memset：meridian 的「未给」是 NAN */
+    sf_qishuo_options_init(&o);            /* 注意：不能 memset：meridian 的「未给」是 NAN */
     o.mode               = a->cal_cfg.mode;
     o.day_boundary_mode  = a->cal_cfg.day_boundary_mode;
     o.utc_offset_minutes = a->cal_cfg.utc_offset_minutes;
@@ -276,8 +275,8 @@ static int year_fill(ui_app *a, int want_terms)
         return -1;                     /* 越界/容量不足 → 整年页留空，见上面的说明 */
 
     /* 先数一遍，装不下就整年不给。
-     * 跟库对容量的态度一致：宁可整片空白，也不要一个「时间序上少了尾巴」的表
-     * —— 那种表看起来是好的，但年尾几行凭空没了。两个循环都只跑 ≤76 次。 */
+     * 跟库对容量的态度一致：宁可整片空白，也不要「时间序上少了尾巴」的表
+     * —— 那种表看起来正常，但年尾几行会缺失。两个循环都只跑 ≤76 次。 */
     int nt = 0, np = 0;
     for (int i = 0; i < y.count; i++) {
         const int k = g_year_scratch[i].kind;
@@ -287,7 +286,7 @@ static int year_fill(ui_app *a, int want_terms)
     if (nt > UI_YEAR_TERMS || np > UI_YEAR_PHASES) return -1;
 
     /* 投影：事件按时间混排，这里按 kind 分到两张表里 —— 各自的顺序就是时间序，
-     * 屏上直接按行号取，不需要任何索引推算（从前那套 MONTH_ORDER 已经删了）。 */
+     * 屏上直接按行号取，不需要任何索引推算。 */
     for (int i = 0; i < y.count; i++) {
         const sf_qishuo_event *e = &g_year_scratch[i];
         ui_year_row *r;
@@ -299,7 +298,7 @@ static int year_fill(ui_app *a, int want_terms)
             r = &a->year_phase[a->year_phase_n++];
             r->term_index = 0xFF;
             /* 望比朔醒目（「一个亮、一个暗」）。判据就是相位角本身 ——
-             * 改相位角表的时候记得颜色也跟着这条走。 */
+             * 改相位角表时颜色须跟着这条走。 */
             r->full = (e->phase_angle_deg == 180.0) ? 1 : 0;
         } else {
             continue;
@@ -367,7 +366,7 @@ static void update_current_term(ui_app *a)
 }
 
 /* `sf_cal_from_instant_ut` 落“今天”时用的同一条日界。当地天文模式必须按
- * 历法经度，不能偷换成屏幕时区；其它模式经 apply_boundary 固定为 UTC 偏移。 */
+ * 历法经度，不得换成屏幕时区；其它模式经 apply_boundary 固定为 UTC 偏移。 */
 static double calendar_day_offset(const ui_app *a)
 {
     return a->cal_cfg.day_boundary_mode == SF_CAL_MEAN_SOLAR_MERIDIAN
@@ -380,7 +379,7 @@ void ui_app_tick(ui_app *a, double jd_tt)
     a->jd = jd_tt;
 
     /* 跨日只做失效标记。这个“日”与 sf_cal_from_instant_ut 一致：固定模式按
-     * UTC 偏移，当地天文模式按历法经度；不在 tick 里顺手重建数据。 */
+     * UTC 偏移，当地天文模式按历法经度；不在 tick 内重建数据。 */
     const double jd_ut = sf_tt_to_ut(jd_tt);
     const int64_t day = sf_cal_civil_day_number(jd_ut, calendar_day_offset(a));
     if (day != a->local_day_key) {
@@ -431,7 +430,7 @@ void ui_app_init(ui_app *a, double jd_tt)
     a->prepared_feature = -2;
     a->prepared_page = -1;
 
-    /* ⚠️ 这一步不能省。上面整个 memset 会把 cal_cfg 清零，而「模式 0 +
+    /* 注意：这一步不能省。上面整个 memset 会把 cal_cfg 清零，而「模式 0 +
      * 偏移 0」既不是默认的历史模式、时区也是格林尼治 —— 太阳页会显示 UT
      * 时刻，农历的 instant→日期 那一步也会差 8 小时。必须显式初始化。 */
     sf_cal_config_init_china_standard_historical(&a->cal_cfg, 480);
@@ -444,8 +443,8 @@ void ui_app_init(ui_app *a, double jd_tt)
     a->rat_hour   = SF_GANZHI_RAT_HOUR_NO_SPLIT;
     a->set_row    = 0;
 
-    /* ⚠️ 上面 memset 会把它清零 = LOW（最省那档）。气朔精度默认要**最大档**：
-     * 库那边 HIGH 就是原来的默认预算，文档里的精度数字也全是这一档的。 */
+    /* 注意：上面 memset 会把它清零 = LOW（最省那档）。气朔精度默认要**最大档**：
+     * 库那边 HIGH 即默认预算，文档里的精度数字也全是这一档的。 */
     a->accuracy   = SF_QISHUO_ACC_HIGH;
 
     /* 步长默认取最粗那档（各行档位表的 [0]）、方向默认「加」——
@@ -486,7 +485,7 @@ void ui_app_init(ui_app *a, double jd_tt)
 
     /* --- 八字 ---
      * 出生信息给个**显眼的假值**（2000-01-01 12:00）而不是「现在」：
-     * 「现在」会让人以为那是默认的盘，而这个功能是要你填自己的。
+     * 「现在」会让人以为那是默认的盘，而该功能要求用户填自己的出生信息。
      * 性别默认 NONE（必须自己选）—— 顺逆判据要靠它，猜一个不如让它空着
      * 并在盘面上明说。 */
     a->birth.year = 2000; a->birth.month = 1; a->birth.day = 1;
@@ -517,13 +516,12 @@ void ui_app_init(ui_app *a, double jd_tt)
 /* ------------------------------------------------------------------
  * 八字：把出生信息算成一张盘
  *
- * 口径是**八字自己那一套**（`a->bazi_cal` / `bazi_rat_hour`），**不是**
- * 从 `cal_cfg` 投影来的 —— 那是上一版的写法，问题是每张盘的出生地不一样，
- * 共用一份「当地经度」时排完一张乌鲁木齐的盘，万年历那边给日出日落用的
- * 「当地经度」也跟着变了。上游那三个工具页（八字/紫微/气朔）本来就各自
- * 一份表单、互不共享，这里跟它对齐。
+ * 口径是**八字自己那一套**（`a->bazi_cal` / `bazi_rat_hour`），**不从**
+ * `cal_cfg` 投影 —— 每张盘的出生地不同，共用一份「当地经度」会让排完一张
+ * 乌鲁木齐的盘后，万年历给日出日落用的「当地经度」也跟着变。上游那三个
+ * 工具页（八字/紫微/气朔）各自一份表单、互不共享，这里与它对齐。
  *
- * ⚠️ 出生瞬间按 sf_calendar.h「钟表读数 → 四柱」那份配方现算：
+ * 注意：出生瞬间按 sf_calendar.h「钟表读数 → 四柱」那份配方现算：
  *   jd_utc = sf_julian_day_ut(读数字段) − 生效偏移／1440
  *   jd_ut1 = sf_utc_to_ut1(jd_utc)      ← 喂给库的必须是 **UT1**，不是 UTC
  * 两个参数（instant_jd_ut1 与 virtual_time）必须分开给：年柱月柱锚节气、
@@ -557,7 +555,7 @@ static void bazi_rebuild_inner(ui_app *a)
      * 配方里那句「要真太阳时那一派的：字段换成真太阳时的日期 + 时刻」办：
      * 先按物理时刻定出 instant，再把虚读时段落换成那套时的读数。
      *
-     * ⚠️ 跟主页 civil_jd() 的**区别**：那个用**显示时区 + 观测经度**（屏上
+     * 注意：跟主页 civil_jd() 的**区别**：那个用**显示时区 + 观测经度**（屏上
      * 那个钟读什么），这个用**出生地偏移 + 出生地经度**（一个盘一个地方），
      * 而且不经过任何显示时区。两处都叫「平太阳时」，量的却不是同一条经线。 */
     sf_cal_datetime vt = a->birth;      /* 钟表时间：读数原样 */
@@ -588,11 +586,11 @@ static void bazi_rebuild_inner(ui_app *a)
 
 /* 换过盘之后**一律**重算运限链。
  *
- * ⚠️ 分两层是必须的：里面那层有**四条提前 return**（出生日期不合法、盘算不出来、
- * 没选性别、起运算不出来）。收拾链的动作要是写在那四条上，早晚有人加第五条忘了补
- * —— 实测就是这么炸的：选好性别、把五层展开，再把出生日期改成 2 月 30 日，
- * `dayun_n` 归 0 而 `luck_open` 还停在上一次的 5，运限页顶栏于是显示 `1/0`
- * （第 1 张 / 共 0 张）。放在唯一的出口上，这条路就没了。 */
+ * 注意：分两层是必须的：里面那层有**四条提前 return**（出生日期不合法、盘算不出来、
+ * 没选性别、起运算不出来）。若把收拾链的动作写在那四条上，早晚有人加第五条忘了补
+ * —— 实测：选好性别、把五层展开，再把出生日期改成 2 月 30 日，`dayun_n` 归 0
+ * 而 `luck_open` 还停在上一次的 5，运限页顶栏于是显示 `1/0`（第 1 张 / 共 0 张）。
+ * 放在唯一的出口上就没有这条路径。 */
 static void bazi_rebuild(ui_app *a)
 {
     bazi_rebuild_inner(a);
@@ -605,7 +603,7 @@ static void bazi_rebuild(ui_app *a)
  *
  * 模型全在这里，ui_view.c 只负责画（它调 ui_app_luck_* 那几个口子）。
  *
- * ⚠️ 三处口径照抄上游 `tool-src/scripts/bazi-page.js`：
+ * 注意：三处口径照抄上游 `tool-src/scripts/bazi-page.js`：
  *   1. **童限**（:550）不是库函数，是 UI 拼的：起运前那一张，柱取「1 岁的小运」；
  *      它存在的前提是第一步大运的起始虚岁 > 1。
  *   2. **流年卡的柱永远是按年号取的流年柱**（:614 `calculateFlowYear(year)`），
@@ -625,7 +623,7 @@ static int luck_childhood_end(const ui_app *a)
 
 static int luck_has_childhood(const ui_app *a) { return luck_childhood_end(a) > 0; }
 
-/* 该层有几张卡。⚠️ 第 1 层的张数取决于第 0 层选中了谁（童限下只有 N 张）。 */
+/* 该层有几张卡。注意：第 1 层的张数取决于第 0 层选中了谁（童限下只有 N 张）。 */
 static int luck_level_count(const ui_app *a, int level)
 {
     if (!a->chart_ok || a->dayun_n <= 0) return 0;
@@ -636,7 +634,7 @@ static int luck_level_count(const ui_app *a, int level)
                              ? luck_childhood_end(a) : 10;
     case UI_LUCK_MONTH: return 12;
     case UI_LUCK_DAY:   return a->luck_day_n;
-    /* ⚠️ 流时要吃**流日柱**，没有流日就没有流时 —— 不然这一层会报 12 张
+    /* 注意：流时要吃**流日柱**，没有流日就没有流时 —— 否则这一层会报 12 张
      * 却每张都算不出来（按下去像是卡住）。 */
     case UI_LUCK_HOUR:  return (a->luck_day_n > 0) ? 12 : 0;
     default:            return 0;
@@ -649,7 +647,7 @@ static int luck_level_count(const ui_app *a, int level)
  *   2 流月   pillar
  *   3 流日   pillar / jdn
  *   4 流时   pillar
- * ⚠️ 第 2/3 层要往上取一层的结果（流月吃流年柱、流时吃流日柱），所以这里
+ * 注意：第 2/3 层要往上取一层的结果（流月吃流年柱、流时吃流日柱），所以这里
  * 递归——深度最多 5，且都是纯整数，不用担心。 */
 static int luck_get(const ui_app *a, int level, int i, ui_luck_entry *out)
 {
@@ -745,7 +743,7 @@ int ui_app_luck_board(const ui_app *a, int slot, int *level, ui_luck_entry *out)
     if (lv < 0 || a->luck_open <= slot) return 0;
     if (!luck_get(a, lv, a->luck_sel[lv], out)) return 0;
 
-    /* ⚠️ 童限选中时，第 0 层那一格要换成**小运柱**（上游 :643-645 的
+    /* 注意：童限选中时，第 0 层那一格要换成**小运柱**（上游 :643-645 的
      * `selected.decade = {packed: yearEntry.xiaoYun}`）：选了流年就用那一年的
      * 小运，还没选到流年就用童限自己的（1 岁那根）。 */
     if (lv == UI_LUCK_DAYUN && out->is_childhood) {
@@ -805,7 +803,7 @@ static void luck_reset(ui_app *a)
 }
 
 /* 流日那层的取点：该**节气月**的整数天区间（上游 `bazi-page.js:666`
- * `monthCivilDates`）。⚠️ 不是公历月！两端是**两个「节」**（这个月的节 + 下个
+ * `monthCivilDates`）。注意：不是公历月！两端是**两个「节」**（这个月的节 + 下个
  * 月的节），所以这一层要解两次节气 —— 只在下标变了或盘变了时算一次。 */
 static const uint8_t kJieIndex[12] = { 21, 23, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19 };
 
@@ -814,8 +812,8 @@ static void luck_days_rebuild(ui_app *a)
     a->luck_dirty = 0;
     a->luck_day_n = 0;
     if (!a->chart_ok || a->dayun_n <= 0) return;
-    /* ⚠️ 条件是 `>= UI_LUCK_DAY`（流月开着就算），**不是**「流日已经开着」——
-     * 那是先有鸡先有蛋：按键那边要看这一层的张数才敢展开（张数 = 0 不许展开），
+    /* 注意：条件是 `>= UI_LUCK_DAY`（流月开着就算），**不是**「流日已经开着」——
+     * 否则会陷入循环依赖：按键那边要看这一层的张数才敢展开（张数 = 0 不许展开），
      * 而张数正是这里算出来的。写成 `> UI_LUCK_DAY` 的话流日永远打不开。 */
     if (a->luck_open < UI_LUCK_DAY) return;
 
@@ -825,7 +823,7 @@ static void luck_days_rebuild(ui_app *a)
     const int mi = a->luck_sel[UI_LUCK_MONTH];    /* 月序：0 = 寅 */
 
     sf_cal_term_event ev;
-    /* ⚠️ 丑月的节（小寒）落在**下一个公历年**，子月的下一个月节同理 ——
+    /* 注意：丑月的节（小寒）落在**下一个公历年**，子月的下一个月节同理 ——
      * 上游那两处 +1（`year + (monthIndex===11?1:0)` / `(monthIndex>=10?1:0)`）。 */
     if (sf_cal_get_specific_term(&a->bazi_cal, year + (mi == 11 ? 1 : 0),
                                  kJieIndex[mi], &ev) != 0) return;
@@ -845,7 +843,7 @@ static void luck_days_rebuild(ui_app *a)
  * ------------------------------------------------------------------ */
 static int scroll_max(const ui_app *a, int page)
 {
-    /* ⚠️ 只有万年历那两页有滚动列表。八字的子页号（0/1）会跟
+    /* 注意：只有万年历那两页有滚动列表。八字的子页号（0/1）会跟
      * UI_PAGE_TODAY(0) / UI_PAGE_LUNAR(1) 撞，所以**必须先看 feature** ——
      * 不然在八字盘上按下键会去读 year_term_n 那个跟它无关的量。 */
     if (a->feature != UI_FEATURE_CALENDAR) return 0;
@@ -880,7 +878,7 @@ static int scroll_max(const ui_app *a, int page)
  * 两套彼此完全独立（上游也是每个工具页各自一份表单、互不共享）。
  * 所以下面这几个实现都收「一个 sf_cal_config + 它的那几个用户意图位」、
  * 不认 ui_app —— `*_cfg` 才是实体，`ui_app` 那几个是薄包装。
- * ⚠️ 加推导规则时改 `*_cfg`，别改包装。
+ * 注意：加推导规则时改 `*_cfg`，不要改包装。
  * ------------------------------------------------------------------ */
 
 /* 时区锁的判据。**只读 config**，所以万年历和八字能共用一条。 */
@@ -978,12 +976,12 @@ static void apply_cal_mode(ui_app *a, int mode)
 
 /* 出生地时区的**生效值**。两处用它：出生信息页的值列、bazi_rebuild 的 instant。
  *
- * ⚠️ 锁的判据是**八字自己的**历法/节气边界，不是万年历那套 —— 两个功能的
+ * 注意：锁的判据是**八字自己的**历法/节气边界，不是万年历那套 —— 两个功能的
  * 口径独立，锁也跟着独立。
- * ⚠️ 锁上时值列显示 480 而不是用户存的那个（跟万年历「显示时区」行同一个做法，
- * 那一行在锁上时也显示 +8:00），标签同时换成「时区锁定」。
+ * 注意：锁上时值列显示 480 而不是用户存的那个（跟万年历「显示时区」行同一个
+ * 做法，那一行在锁上时也显示 +8:00），标签同时换成「时区锁定」。
  *
- * ⚠️ 连带影响（README 里要点名）：默认历法就是「中国古历」，所以**默认状态
+ * 注意：连带影响（README 里要点名）：默认历法就是「中国古历」，所以**默认状态
  * 下这一行就是灰的 +480**。要排外国的盘，先把八字的历法改成「当地天文」。 */
 static int32_t bazi_offset(const ui_app *a)
 {
@@ -1032,13 +1030,13 @@ int32_t ui_app_bazi_offset(const ui_app *a)
     return bazi_offset(a);
 }
 
-/* 出生信息页第 row 行现在按不动。两行会被锁，判据都是**八字自己的**
+/* 出生信息页第 row 行是否按不动。两行会被锁，判据都是**八字自己的**
  * 历法/节气边界（不是万年历那套）。
  *
- * ⚠️ row 这个参数不能省成「整页一个开关」：时区锁只关那一行，其余七行
- * （年/月/日/时/分/性别/经度）跟历法口径**无关或另有判据**。第一版就是没带
- * row、拿 `cfg_utc_locked()` 当整页的闸门 —— 而默认历法正是「中国古历」，
- * 于是那一页**所有行都按不动了**，屏上却只把时区那一行画暗，是个
+ * 注意：row 这个参数不得省成「整页一个开关」：时区锁只关那一行，其余七行
+ * （年/月/日/时/分/性别/经度）跟历法口径**无关或另有判据**。若不带 row、
+ * 拿 `cfg_utc_locked()` 当整页的闸门，则默认历法正是「中国古历」，
+ * 那一页**所有行都按不动**，屏上却只把时区那一行画暗 —— 造成
  * 「界面说能改、按键说不能」的分歧。 */
 int ui_app_birth_inert(const ui_app *a, int row)
 {
@@ -1046,11 +1044,10 @@ int ui_app_birth_inert(const ui_app *a, int row)
     case UI_BIRTH_OFFSET:
         return cfg_utc_locked(&a->bazi_cal);
     case UI_BIRTH_MERIDIAN:
-        /* ⚠️ 跟万年历设置页那条判据**不一样**，是故意的：出生地经度在这边有
+        /* 注意：跟万年历设置页那条判据**不一样**，是故意的：出生地经度在这边有
          * **两个**消费者 —— 日界（`calendar_meridian_deg` 当日界的经线）和
          * 排盘钟表（平/真太阳时拿它换经线）。**只要还有一个活着的就不该灰**；
-         * 上游那个 longitude 也就是个普通输入框，压根不 disable。
-         * （这一条是从八字设置页整段搬过来的 —— 判据一个字没改。） */
+         * 上游那个 longitude 也只是普通输入框，并不 disable。 */
         return a->bazi_cal.day_boundary_mode != SF_CAL_MEAN_SOLAR_MERIDIAN
             && a->bazi_time_basis == UI_TIME_CLOCK;
     default:
@@ -1072,10 +1069,10 @@ int ui_app_bset_inert(const ui_app *a, int row)
  * 只有一档的行（枚举类）「换步长」这个键不起作用，「调一下」就是往后/往前
  * 翻一格。所以枚举行不需要单独写分支，走同一套代码即可。 */
 static const double STEP_TZ[]  = { 60, 30, 15, 5 };       /* 分钟 */
-/* ⚠️ 这一档的**值列必须显示两位小数**（ui_view.c 的 fmt_deg）—— 不然 0.01°
+/* 注意：这一档的**值列必须显示两位小数**（ui_view.c 的 fmt_deg）—— 不然 0.01°
  * 那一档按十下屏上一个字都不动，看着像按键坏了。0.01° 的实义：纬度 1.1 km、
- * 经度在赤道上 2.4 秒时差，是拿来跟别的工具对齐到小数点后两位的，
- * 不是拿来肉眼调日出的。 */
+ * 经度在赤道上 2.4 秒时差，用于跟别的工具对齐到小数点后两位，
+ * 不是用于肉眼调日出的。 */
 static const double STEP_DEG[] = { 10, 1, 0.1, 0.01 };    /* 度 */
 static const double STEP_ONE[] = { 1 };                   /* 枚举：一格 */
 
@@ -1110,11 +1107,10 @@ static const double YEAR_STEPS[] = { 1, 10 };
  *
  *   1. 单位不一样的行走不同的表；
  *   2. 单位**一样**的行直接共用同一张表 —— 出生地时区跟「显示时区」都是分钟，
- *      所以这里指 STEP_TZ，不再抄一份。（抄一份就会像原来那样少一档，
- *      两个屏上同一件事的档位还不一样，换个页就得重新学。）
+ *      所以这里指 STEP_TZ，不另抄一份。抄一份会少一档，两个屏上同一件事的
+ *      档位不一致，换个页就得重新学。
  *
- * 每行都有表 —— 「只能 +1」不是设计，是原来漏写了这几张表、并且 birth_apply
- * 里把步长整个丢掉了（那几个 `wrap_i(x + d, N)` 只加了 d）。 */
+ * 每行都必须有表：`birth_apply` 里 `wrap_i(x + d, N)` 只加 d，缺表就只能 +1。 */
 static const double BIRTH_STEP_YEAR[]   = { 1, 10 };            /* 年 */
 static const double BIRTH_STEP_MONTH[]  = { 1, 3, 6 };          /* 月，12 回环 */
 static const double BIRTH_STEP_DAY[]    = { 1, 5 };             /* 日，夹在 1..31 */
@@ -1140,9 +1136,8 @@ static const double *birth_steps(int row, int *n)
 }
 
 /* 八字设置页各行的档位。**整页都是枚举行**（钟表/历法/日界/节气边界/早晚子时），
- * 所以一律 STEP_ONE —— 「换步长」在这一页没有意义。
- * ⚠️ 挪走「出生地经度」之前这里有过一行度表；那一行现在在出生信息页上，
- * 用同一张 STEP_DEG。 */
+ * 所以一律 STEP_ONE —— 「换步长」在这一页没有意义。出生地经度那一行在出生
+ * 信息页上，用 STEP_DEG。 */
 static const double *bset_steps(int row, int *n)
 {
     (void)row;
@@ -1197,7 +1192,7 @@ static double magnitude_of(const ui_app *a, const double *st, int n)
     return st[k];
 }
 
-/* 当前功能有几个子页。⚠️ 通用分支里所有 `% N` 都必须走这里 ——
+/* 当前功能有几个子页。注意：通用分支里所有 `% N` 都必须走这里 ——
  * `page` 是两个功能共用的裸 int，UI_BAZI_PAGE_CHART(1) 会撞上
  * UI_PAGE_LUNAR(1)，拿 UI_PAGE_COUNT 去模会翻出界。 */
 static int subpage_count(const ui_app *a)
@@ -1213,9 +1208,9 @@ static int wrap_i(int v, int n)
 
 /* 出生信息页：「调一下」。
  *
- * ⚠️ 日期**不做「自动夹到月末」**：2 月 30 日就让它留在那儿、顶栏明说
+ * 注意：日期**不做「自动夹到月末」**：2 月 30 日就让它留在那儿、顶栏明说
  * 「无此日期」。用户手滑打到 30 就说明他要改，悄悄改成 28 反而更坏 ——
- * 而且那也是库的 valid_civil_time 的态度（回环校验失败就拒绝，不是修正）。
+ * 库的 valid_civil_time 也是这个态度（回环校验失败就拒绝，不是修正）。
  *
  * 回环 vs 夹住，按**是不是真周期**分：
  *   月 12 / 时 24 / 分 60 是真周期 —— 到顶了绕回去（23 时 + 6 → 5 时）；
@@ -1223,7 +1218,7 @@ static int wrap_i(int v, int n)
  *   那是 1..31 这个周期本身就不成立（本 UI 不做月长表，理由见下）；
  *   而偏移停住是 UTC±14 的硬边界。
  *
- * ⚠️ 日为什么不做月长表：这个库的「某月有没有 30 日」是**回环查一遍历法**
+ * 注意：日为什么不做月长表：这个库的「某月有没有 30 日」是**回环查一遍历法**
  * 得到的（见 sf_bazi_valid_civil_time），而历法模式不同答案就不同
  * （「中国古历」下 1582-10-05..14 根本不存在）。在 UI 里再写一张公历闰年表
  * = 第二处真相，两边一旦不一致，用户看到的是「表格说合法、顶栏说无此日期」。
@@ -1232,10 +1227,9 @@ static void birth_apply(ui_app *a)
 {
     int n = 0;
     const double *st = active_steps(a, &n);
-    /* ⚠️ **不能在这里就把步长整数化**：经度那一档有 0.01°，`lround(0.01) = 0`，
-     * 那一档就永远按不动了 —— 这正是「出生地经度」还在设置页时踩过的坑
-     * （`bset_apply` 里那段注还在）。行搬到这一页，坑也跟着搬过来了。
-     * 所以：**double 的留一份给经度**，整数化的那份只发给下面几个整数行。 */
+    /* 注意：**不能在这里就把步长整数化**：经度那一档有 0.01°，`lround(0.01) = 0`，
+     * 那一档就永远按不动。所以：**double 的留一份给经度**，整数化的那份只发给
+     * 下面几个整数行。 */
     const double magd = magnitude_of(a, st, n);
     const int mag = (int)lround(magd);
     const int d = a->step_plus ? +1 : -1;
@@ -1278,7 +1272,7 @@ static void birth_apply(ui_app *a)
     case UI_BIRTH_MERIDIAN: {
         /* 跟万年历设置页那条逐字一样（含 180 的硬边界和 `tidy`）—— 同一个
          * 旋钮，两处同一组档位、同一个手感，改的只是**八字这一份**配置。
-         * ⚠️ 不需要跟着调 bazi_apply_cfg：经线是**解算时读**的（日界和排盘
+         * 注意：不需要跟着调 bazi_apply_cfg：经线是**解算时读**的（日界和排盘
          * 钟表都是当场拿 `calendar_meridian_deg` 算），没有缓存要刷新。 */
         double v = tidy(a->bazi_cal.calendar_meridian_deg + d * magd);
         if (v < -180.0) v = -180.0;
@@ -1302,10 +1296,10 @@ double ui_app_step_magnitude(const ui_app *a)
 {
     int n = 0;
     const double *st = active_steps(a, &n);
-    /* ⚠️ 判据是**档位数**，不是数值 —— 经纬度的档位表里就有 1° 这一档，
+    /* 注意：判据是**档位数**，不是数值 —— 经纬度的档位表里就有 1° 这一档，
      * 拿「mag == 1」当「没有步长」会让 1° 那一档的顶栏退回显示时刻。 */
     if (n <= 1) return 0.0;                  /* 枚举：没有「步长」可言 */
-    /* ⚠️ feature 那一半不能省：`page` 是两个功能共用的裸 int，
+    /* 注意：feature 那一半不能省：`page` 是两个功能共用的裸 int，
      * UI_BAZI_PAGE_BIRTH(0) / _CHART(1) 会撞上 UI_PAGE_TODAY / _LUNAR。
      * 现在恰好撞不到 UI_PAGE_SETTINGS(5)，但那是**巧合**，不是推理。 */
     if (a->feature == UI_FEATURE_CALENDAR && a->page == UI_PAGE_SETTINGS
@@ -1355,7 +1349,7 @@ static void setting_apply(ui_app *a)
      * 一次重建是一整轮 sf_qishuo_year_run（HIGH 档约 50 次全量求解），
      * 按着观测经纬度也重建纯属浪费。
      *
-     * ⚠️ 往下面这个 switch 里**加行时记得看一眼**：改的东西只要进了
+     * 注意：往下面这个 switch 里**加行时要看一眼**：改的东西只要进了
      * sf_qishuo_options（见 year_fill 的投影表），就得在这里置位。漏了就是
      * 「设置改了、气/朔两页还是老样子」，而且只有换年份或重启才刷得掉，
      * 极难归因。 */
@@ -1459,13 +1453,11 @@ static void setting_apply(ui_app *a)
 /* 八字设置页：「调一下」。
  *
  * 跟 setting_apply 是**两套状态**（bazi_cal vs cal_cfg），所以不能共用函数；
- * 但每一行的处理逐行对齐 —— 改这里时顺手看一眼那边，两页的行是一一对应的。
+ * 但每一行的处理逐行对齐 —— 修改本处时需同步检查那边，两页的行一一对应。
  *
- * ⚠️ 这一页**没有数值行**（整页枚举），所以用不到步长 —— 「换步长」那个键
- * 在这一页是空转的。经度那一行搬去出生信息页之前，这里算过一次 `magnitude_of`，
- * 而且**必须留成 double**（0.01° 那一档 lround 成 0 就永远按不动）；现在
- * 那个陷阱跟着那一行搬到了 `birth_apply` 里，那边的 `mag` 也是 double 起的、
- * 只在最后才 `lround`。 */
+ * 这一页**没有数值行**（整页枚举），所以用不到步长 —— 「换步长」那个键
+ * 在这一页是空转的。数值行的 0.01° 档必须留成 double（lround 会抹成 0），
+ * `birth_apply` 的 `mag` 即为此。 */
 static void bset_apply(ui_app *a)
 {
     const int d = a->step_plus ? +1 : -1;
@@ -1505,12 +1497,12 @@ static void bset_apply(ui_app *a)
 }
 
 /* 「换步长」：在**当前这一页**的档位表里往后滚一格。
- * ⚠️ 必须走 active_steps，不能直接拿 setting_steps(a->set_row) —— 在气/朔
+ * 注意：必须走 active_steps，不能直接拿 setting_steps(a->set_row) —— 在气/朔
  * 两页上 set_row 是设置页残留的光标位置，跟这里的档位表根本不是一个东西：
  * 轻则按了没反应（撞上枚举行 n=1），重则滚出一个大于 2 的下标，
  * 再被 magnitude_of 夹到 10 年那一档，看着像「步长键时灵时不灵」。
  *
- * ⚠️ 写回也要走 step_index —— 出生信息页那份下标是**另一个变量**
+ * 注意：写回也要走 step_index —— 出生信息页那份下标是**另一个变量**
  * （见 step_index 的注）。设置页、气朔页、出生信息页共用这一个函数。 */
 static void cycle_step(ui_app *a)
 {
@@ -1540,7 +1532,7 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
      * 功能选择页（feature == -1）
      *
      * 上下左右**都**移动高亮（用户要的是「上下左右滑」），OK 进去。
-     * 只有两个功能，所以左右与上下等价 —— 但两对键都认，省得猜。
+     * 只有两个功能，所以左右与上下等价 —— 两对键都认，避免猜测。
      * ACT 照旧切主题；BACK 在这一页没有上一级，不响应。
      * ------------------------------------------------------------------ */
     if (a->feature < 0) {
@@ -1572,10 +1564,10 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
             return;
         }
         if (b == UI_BTN_ACT) { a->step_plus = !a->step_plus; return; }
-        /* ⚠️ 变暗的行**不吃按键** —— 照抄万年历设置页那套（上游的
+        /* 注意：变暗的行**不吃按键** —— 照抄万年历设置页那套（上游的
          * `controls.forEach(c => c.disabled = locked)`）。不挡的话按下去
          * 没反应、内部值却已经翻了：时区被锁着时用户以为改的是 +8，
-         * 一解锁蹦出来一个他从来没选过的偏移。 */
+         * 一解锁会蹦出一个他从未选过的偏移。 */
         if (b == UI_BTN_OK) {
             if (!ui_app_birth_inert(a, a->birth_row)) birth_apply(a);
             return;
@@ -1617,11 +1609,10 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
      * ------------------------------------------------------------------ */
     if (a->feature == UI_FEATURE_BAZI && a->page == UI_BAZI_PAGE_CHART) {
         /* OK / DOWN = 往下**加**一级，UP = **退**一级。
-         * ⚠️ 这里原来是 `chart_mode = (chart_mode+1) % 3` —— 从 6 列想回 5 列
-         * 得绕一圈（6→4→5），用户问的就是这个「怎么取消流年」。现在退一级
-         * 就是退一级（夹在 0..5，不回环）。 */
+         * 注意：这里不得写成 `chart_mode = (chart_mode+1) % 3` —— 从 6 列想回
+         * 5 列得绕一圈（6→4→5）。退一级就是退一级（夹在 0..5，不回环）。 */
         if (b == UI_BTN_OK || b == UI_BTN_DOWN) {
-            /* ⚠️ 没选性别时**别装作递进**：顺逆判据要靠性别，`dayun_n` 是 0，
+            /* 注意：没选性别时**不要装作递进**：顺逆判据要靠性别，`dayun_n` 是 0，
              * 按下去什么都不会多出来 —— 用户会以为「流年大运没写」。
              * 与其静默不动，不如把人送到该去的那一行。 */
             if (a->gender != SF_BAZI_GENDER_MALE
@@ -1660,10 +1651,10 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
      *   K3/K4  翻页 —— **回归全站惯例**（K7 跟 K4 同义，也都是翻页）
      *   K6     退一级页面
      *
-     * ⚠️ 这里原来是我把「左右能选中看」直接压在 K3/K4 上，代价是把全站唯一
-     * 一处「左右不翻页」的例外做进了这一页 —— 用户在别的页左右翻惯了，到了
-     * 这里左右一跳就换了大运。**「选中」得是显式的一步**：K5 动，K8 定方向。
-     * 位置本身不丢：每行右端那个副标签就写着 `3/8 33-42`。
+     * 注意：不得把「左右选中」直接压在 K3/K4 上 —— 那会成为全站唯一一处
+     * 「左右不翻页」的例外，用户在别的页左右翻惯了，到这里左右一跳就换了大运。
+     * **「选中」必须是显式的一步**：K5 动，K8 定方向。位置不丢：每行右端
+     * 副标签就写着 `3/8 33-42`。
      * ------------------------------------------------------------------ */
     if (a->feature == UI_FEATURE_BAZI && a->page == UI_BAZI_PAGE_LUCK) {
         if (b == UI_BTN_DOWN) {
@@ -1723,7 +1714,7 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
             a->step_plus = !a->step_plus;
             return;
         }
-        /* ⚠️ 下面两个对变暗的行**不响应** —— 照抄 tools 的
+        /* 注意：下面两个对变暗的行**不响应** —— 照抄 tools 的
          * `controls.forEach(c => c.disabled = locked)`。
          * 不挡的话，按下没反应但内部值已经翻了，等切到「当地天文」时
          * 定气日界会莫名其妙变成「按当地经度」—— 一个纯隐形的状态。 */
@@ -1741,9 +1732,9 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
 
     /* 气/朔两页：K5/K7/K8 也是**同一套编辑三键**，只是目标换成**年份**。
      * 上下键照旧滚动、左右键照旧翻页 —— 这两页不重载任何导航键。
-     * 代价（写进 sim/README）：这两页 K5 不再是「回主页」（K6 照旧）、
+     * 代价（写进 README.md）：这两页 K5 不再是「回主页」（K6 照旧）、
      * K8 不再是「日夜主题」。 */
-    /* ⚠️ feature 那一半**不能省** —— `page` 是两个功能共用的裸 int，
+    /* 注意：feature 那一半**不能省** —— `page` 是两个功能共用的裸 int，
      * 八字的子页号会跟万年历的撞：`UI_BAZI_PAGE_SETTINGS`(2) == `UI_PAGE_TERMS`(2)、
      * `UI_BAZI_PAGE_LUCK`(3) == `UI_PAGE_PHASES`(3)。少了这道闸门，
      * 八字那两页按 K5 会去改**气/朔的年份**（`year_step`），而屏上是另一页 ——
@@ -1793,9 +1784,9 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
     case UI_BTN_BACK:
         /* **逐级退回**：子页 → 主页 → 选择页。两个功能走同一条规矩。
          *
-         * ⚠️ 万年历这边原来是「主页按 BACK 还是主页」—— 于是功能选择页
-         * **除了开机之外没有第二条路能进去**（得先进八字、再按两次 BACK 绕
-         * 回来）。两级模型的第二级必须退得出去，这是那个 bug 的根。 */
+         * 注意：不得让主页的 BACK 停在主页 —— 否则功能选择页**除开机之外没有
+         * 第二条路能进去**（得先进八字、再按两次 BACK 绕回来）。两级模型的
+         * 第二级必须退得出去。 */
         if (a->feature == UI_FEATURE_BAZI) {
             /* 按**子页号**退（跟页码点的顺序一致）：设置 → 运限 → 排盘 →
              * 出生信息 → 选择页。加了「运限」这一页之后，写死「退到出生信息」
@@ -1807,7 +1798,7 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
         }
         if (a->page == UI_PAGE_TODAY) {
             /* 已经在这一级的顶上了 —— 再退一级就是选择页。
-             * ⚠️ 别让控制流落到下面那句 `page = TODAY`（那是个空操作，
+             * 注意：不要让控制流落到下面那句 `page = TODAY`（那是个空操作，
              * 但会让人以为这儿有「回主页」的意思）。 */
             a->feature = -1;
             a->pick    = UI_FEATURE_CALENDAR;
@@ -1832,7 +1823,7 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
 /* ------------------------------------------------------------------
  * 农历 / 月历网格 / 出没
  *
- * ⚠️ 库那一层收 JD(UT)，而 a->jd 是 TT。每处都要转，漏一处就会差 ΔT
+ * 注意：库那一层收 JD(UT)，而 a->jd 是 TT。每处都要转，漏一处就会差 ΔT
  * （今天约 69 秒）—— 对「哪一天是初一」在午夜附近是致命的。
  * ------------------------------------------------------------------ */
 void ui_app_set_observer(ui_app *a, double lat_deg, double lon_east_deg)
@@ -1864,9 +1855,9 @@ static double civil_jd(const ui_app *a, double jd_tt)
 
 static void local_fields(const ui_app *a, sf_cal_datetime *out)
 {
-    /* ⚠️ 先整秒归整再拆。jd 在 2.46e6 量级，1 秒 ≈ 1.2e-5 天，末位本来就在
+    /* 注意：先整秒归整再拆。jd 在 2.46e6 量级，1 秒 ≈ 1.2e-5 天，末位本来就在
      * 5e-5 秒上下抖；直接对小数逐级截断的话 22:53:00 会显示成 22:52:59
-     * （实测踩到过）。ui_calendar_from_jd 也是先 round 再拆的。
+     * （实测）。ui_calendar_from_jd 也是先 round 再拆的。
      *
      * 秒要留着：时柱在 23:00 换，差一秒就是另一个柱子。 */
     const double shifted = civil_jd(a, a->jd) + 0.5;
@@ -1962,8 +1953,8 @@ static void rebuild_lunar_grid(ui_app *a)
 
 /* 出没 / 昼长 / 太阳高度 / 均时差。
  *
- * ⚠️ **这四个不是一回事，成本差两个数量级**，从前一律每帧重算，那是这一页
- * 最大的浪费（实测出没一项就占了每帧开销的九成以上）：
+ * 注意：**这四个成本差两个数量级**，不得一律每帧重算 —— 出没一项就占了
+ * 每帧开销的九成以上（实测）：
  *
  *   每帧都要 ─ 太阳高度  一次求值，最便宜。高度每秒都在变，不缓存是对的。
  *   每帧都要 ─ 均时差    一次求值（约两次视黄经的量）。天内变化是分钟级，

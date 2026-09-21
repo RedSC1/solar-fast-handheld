@@ -4,7 +4,7 @@
  * 只用系统自带的 AppKit / CoreGraphics，不需要 brew 装 SDL2。键盘事件在
  * SimView 里收，转成 8 个逻辑按钮 + 几个宿主专用键，塞进队列让 main.c 取。
  *
- * 自建 runloop：main.c 控制节奏（30 fps），所以这里不用 [NSApp run]，
+ * 自建 runloop：main.c 控制节奏（30 fps），故这里不用 [NSApp run]，
  * 而是每次 poll 用 nextEventMatchingMask + distantPast 抽干事件队列。
  * ================================================================== */
 #import <Cocoa/Cocoa.h>
@@ -39,9 +39,9 @@ static void push(sim_ev e)
 /* ------------------------------------------------------------------
  * 键盘
  *
- * 数字键 1..8 永远等于模块丝印 K1..K8；另外给一套更顺手的别名。
- * 方向键走 keyCode（charactersIgnoringModifiers 对功能键给的是私有区
- * 码点，靠不住），可打印字符走 charactersIgnoringModifiers（不受键盘
+ * 数字键 1..8 永远等于模块丝印 K1..K8；另提供一套更易用的别名。
+ * 方向键走 keyCode（charactersIgnoringModifiers 对功能键返回的是私有区
+ * 码点，不可靠），可打印字符走 charactersIgnoringModifiers（不受键盘
  * 布局影响）。
  * ------------------------------------------------------------------ */
 static int key_to_btn(unsigned short kc, NSString *s)
@@ -84,7 +84,7 @@ static void handle_key(NSEvent *e, int down)
 
     if (b >= 0) {
         const uint32_t bit = 1u << b;
-        /* 去抖：按住不放时系统会一直发 keyDown，不滤掉的话翻页会疯跑 */
+        /* 去抖：按住不放时系统会持续发 keyDown，不滤掉会使翻页失控 */
         if (down) { if (g_down & bit) return; g_down |= bit; }
         else      { if (!(g_down & bit)) return; g_down &= ~bit; }
         sim_ev ev = { SIM_EV_BUTTON, b, down };
@@ -96,8 +96,8 @@ static void handle_key(NSEvent *e, int down)
     NSString *s = [e charactersIgnoringModifiers];
     if ([s length] == 0) return;
 
-    /* 宿主专用键（不属于那 8 个按钮）。这里**故意**允许自动重复，
-     * 因为按住 [ 一直往回倒时间正是想要的。 */
+    /* 宿主专用键（不属于那 8 个按钮）。此处**故意**允许自动重复，
+     * 因为按住 [ 持续往回倒时间正是所需行为。 */
     sim_ev ev = { SIM_EV_NONE, 0, 0 };
     switch ([s characterAtIndex:0]) {
     case '[':  ev.kind = SIM_EV_TIME;  ev.val = -1; push(ev); break;
@@ -134,7 +134,7 @@ static void handle_key(NSEvent *e, int down)
 - (void)keyDown:(NSEvent *)e { handle_key(e, 1); }
 - (void)keyUp:(NSEvent *)e   { handle_key(e, 0); }
 
-/* 别让系统发出警告响 —— 我们不处理的键安静吞掉 */
+/* 避免系统发出警告响 —— 不处理的键安静吞掉 */
 - (void)flagsChanged:(NSEvent *)e { (void)e; }
 @end
 
@@ -240,8 +240,8 @@ static int cocoa_init(const char *title, int scale)
         [g_win makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
-        /* 真的起来了才算成功。没有这个检查，在无头环境（比如 ssh 进去跑）
-         * 里窗口建不出来也不报错，--selftest 会假阳性。 */
+        /* 窗口真正起来才算成功。没有这个检查，在无头环境（如 ssh 登录）
+         * 中窗口建不出来也不报错，--selftest 会假阳性。 */
         if (!g_win || ![g_win isVisible]) return 1;
     }
     return 0;

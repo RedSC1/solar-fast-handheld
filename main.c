@@ -2,8 +2,8 @@
  * main.c —— 模拟器入口
  *
  * 节奏由这里控制：抽事件 → 推进时钟 → 画一帧 → 交给后端显示。
- * 时间来源也在这里（下面的 sim_now_jd_tt）—— ui_*.c 那一层刻意不含
- * 「取当前时间」，好让它原样搬去 MCU 换成 RTC。
+ * 时间来源也在这里（下面的 sim_now_jd_tt）—— ui_*.c 那一层刻意不提供
+ * 「取当前时间」，以便原样移植到 MCU 换成 RTC。
  * ================================================================== */
 #include <math.h>
 #include <stdio.h>
@@ -25,9 +25,9 @@ static int    g_view_year;              /* --year：气/朔两页看哪一年，
 
 /* 当前时刻。系统钟给的是 **UTC**，转成 TT —— solar_fast 全部按 TT。
  *
- * ⚠️ 转换用库的 sf_utc_to_tt（闰秒表），不要自己拿 ΔT 多项式凑：这里从前
- * 用的是 sim 自带那份 Espenak–Meeus，跟库的 IERS 年表差 5.9 秒，于是屏上
- * 的钟一直快 6 秒 —— 因为显示那边减的是库的 ΔT，一加一减就对不上了。 */
+ * 注意：转换必须用库的 sf_utc_to_tt（闰秒表），不得自行用 ΔT 多项式推算：
+ * sim 自带的 Espenak–Meeus 与库的 IERS 年表差 5.9 秒，会使屏上的钟快
+ * 约 6 秒 —— 因为显示那边减的是库的 ΔT，一加一减就对不上。 */
 static double sim_now_jd_tt(void)
 {
     time_t t = time(NULL);
@@ -62,15 +62,15 @@ static void usage(const char *argv0)
            "  --lat 纬度   观者纬度，北正（默认 39.9042）\n"
            "  --lon 经度   观者经度，东正（默认 116.4074）\n"
            "  --utc 分钟   显示时区偏移，分钟（默认 480 = UTC+8）\n"
-           "              ⚠️ 默认历法是「中国古历」，那把锁会把**生效值**钉在\n"
-           "                 +480 —— 想真的换时区，先在设置页把历法改成别的。\n"
+           "              注意：默认历法是「中国古历」，该锁定会把生效值固定为\n"
+           "                 +480。需改用其他时区时，先在设置页更改历法。\n"
            "  --selftest  开窗出一帧就退出，用来验证后端能起来\n",
            argv0, SIM_DEFAULT_SCALE);
 }
 
 /* ------------------------------------------------------------------
- * 无头渲染：把画面写成 PPM，好在没有显示器（或不想开窗口）时检查版式。
- * PPM 是几行代码的事，不值得为截图引一个 PNG 库。
+ * 无头渲染：把画面写成 PPM，便于在没有显示器（或不开窗口）时检查版式。
+ * PPM 只需几行代码，不值得为截图引入 PNG 库。
  * ------------------------------------------------------------------ */
 static void write_ppm(const char *path, const uint16_t *buf, int w, int h)
 {
@@ -88,9 +88,9 @@ static void write_ppm(const char *path, const uint16_t *buf, int w, int h)
     printf("  %s\n", path);
 }
 
-/* 渲染一帧并写盘。pressed 用来点亮相应的按钮（默认点 OK，好看清新色）。
+/* 渲染一帧并写盘。pressed 用来点亮相应的按钮（默认点 OK，以呈现按下配色）。
  * set_row 只对设置页有意义，-1 表示不动；live=1 先把设置页切到「所有行都
- * 活着」的那套（当地天文 + 按当地经度），好跟默认那套变暗的对照着看。 */
+ * 有效」的那套（当地天文 + 按当地经度），以便与默认那套变暗的对照。 */
 /* feature 与 page 是**两级**：feature < 0 是功能选择页。默认万年历，
  * 只有要拍八字那几页时才传别的 —— 多数调用点写 -2 表示「不变」。 */
 #define SHOT_FEATURE_KEEP (-2)
@@ -107,11 +107,11 @@ static void shot(const char *path, uint16_t *win, int scale, double jd,
     app.page = page;
     if (g_view_year) ui_app_set_view_year(&app, g_view_year);
     if (set_row >= 0 || live) {
-        /* ⚠️ 别直接写 app.set_row —— 那样绕过了 settings_keep_visible，
-         * 光标跑到屏外也不会滚，渲出来的图看着像「没滚动」。按真按钮走。 */
+        /* 注意：不得直接写 app.set_row —— 那样会绕过 settings_keep_visible，
+         * 光标跑到屏外也不滚动，渲出的图看似「没滚动」。应走真实按键。 */
         app.page = UI_PAGE_SETTINGS;
         if (live) {
-            /* ⚠️ 调值是 K5（确定），不是 K4 —— 设置页的左右键跟其它页一样
+            /* 注意：调值用 K5（确定），不是 K4 —— 设置页的左右键跟其它页一样
              * 是翻页，按下去会把 page 翻走。 */
             app.set_row = UI_SET_CAL_MODE;
             ui_app_button(&app, UI_BTN_OK, 1);           /* → 当地天文 */
@@ -128,7 +128,7 @@ static void shot(const char *path, uint16_t *win, int scale, double jd,
 }
 
 /* 功能选择页。pick 是主还是副 —— 两张都要拍：反色块在纸白底上够醒目，
- * 但「未选中」那半边的细框在夜间主题下够不够看，只有渲出来才知道。 */
+ * 而「未选中」那半边的细框在夜间主题下是否可见，只有渲出来才能确认。 */
 static void shot_pick(const char *path, uint16_t *win, int scale, double jd,
                       int night, int pick)
 {
@@ -144,8 +144,8 @@ static void shot_pick(const char *path, uint16_t *win, int scale, double jd,
     write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
 }
 
-/* 八字两页。出生信息要**先填进去**再拍，而且它跟 shot() 的参数集差得远 ——
- * 不往 shot() 上再挂三个参数，单独一个。 */
+/* 八字两页。出生信息须**先填入**再拍，且它与 shot() 的参数集差异较大，
+ * 故单独一个函数而非再向 shot() 挂三个参数。 */
 static void shot_bazi(const char *path, uint16_t *win, int scale, double jd,
                       int night, int page, int mode, int birth_row, int steps,
                       int gender, int basis)
@@ -155,23 +155,23 @@ static void shot_bazi(const char *path, uint16_t *win, int scale, double jd,
     if (night) ui_app_button(&app, UI_BTN_ACT, 1);
     app.feature = UI_FEATURE_BAZI;
     app.page    = page;
-    /* 固定填 2000-01-01 12:00 +480 —— 与 --at 那个当下时刻无关，
-     * 这样盘面上的四柱/大运/流年每次都是同一张，好逐像素比对。
-     * gender 传 -1 时故意让「未选性别」那条提示也拍到。 */
+    /* 固定填 2000-01-01 12:00 +480 —— 与 --at 的当下时刻无关，
+     * 这样盘面上的四柱/大运/流年每次都是同一张，便于逐像素比对。
+     * gender 传 -1 时让「未选性别」那条提示也被拍到。 */
     app.birth.year = 2000; app.birth.month = 1; app.birth.day = 1;
     app.birth.hour = 12;   app.birth.minute = 0; app.birth.second = 0.0;
     app.birth_offset = 480;
     app.gender = (gender < 0) ? SF_BAZI_GENDER_NONE
                : (gender == 0) ? SF_BAZI_GENDER_FEMALE : SF_BAZI_GENDER_MALE;
     /* basis < 0 = 不动（默认「钟表时间」）。要拍「排盘钟表=真太阳时」时
-     * 得在这里直接设 —— 那是**八字设置页**上的字段，而这一趟拍的是出生页；
-     * 走按键就得先翻到设置页再翻回来，拍出来的东西一样。 */
+     * 在此直接设 —— 那是**八字设置页**上的字段，而此处拍的是出生页；
+     * 走按键须先翻到设置页再翻回来，结果相同。 */
     if (basis >= 0) app.bazi_time_basis = basis;
     app.chart_dirty = 1;              /* 上面刚改过 birth，逼它重算 */
 
     if (page == UI_BAZI_PAGE_BIRTH) {
         for (int k = 0; k < birth_row; k++) ui_app_button(&app, UI_BTN_DOWN, 1);
-        /* K7 = 换档。⚠️ 必须在**选好行之后**按：档位表是按当前光标行取的
+        /* K7 = 换档。注意：必须在**选好行之后**按：档位表按当前光标行取
          * （ui_app.c 的 active_steps），顺序反了就一直在拍第一行的档位。 */
         for (int k = 0; k < steps; k++) ui_app_button(&app, UI_BTN_MENU, 1);
     }
@@ -213,17 +213,17 @@ static void shot_luck(const char *path, uint16_t *win, int scale, double jd,
     write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
 }
 
-/* 八字设置页。跟 shot_bazi 差得远（要的是**行**和**那几行活没活着**），
- * 所以单独一个。
+/* 八字设置页。跟 shot_bazi 差异较大（需要的是**行**和**那几行是否有效**），
+ * 故单独一个。
  *
- * `local_cal` = 先把「历法」按一下（中国古历 → 当地天文）再拍：这一下会让
- * **三行同时变活**（定气日界、出生地经度、还有出生信息页的出生地时区 ——
- * 时区锁的判据是 pillar_historical_mode 和 mode）。只拍默认那套就永远看不到
- * 它们活着的样子，而「默认全是灰的」恰恰是这一版最容易看懵的地方。
+ * `local_cal` = 先把「历法」按一下（中国古历 → 当地天文）再拍：这一下会使
+ * **三行同时生效**（定气日界、出生地经度、以及出生信息页的出生地时区 ——
+ * 时区锁的判据是 pillar_historical_mode 和 mode）。只拍默认那套就无法看到
+ * 它们生效的样子，而「默认全灰」是这一版最易看懵之处。
  *
- * ⚠️ 直接写 `app.bset_row` 而不是按 K1/K2 —— 光标行是纯状态，按方向键和
- * 赋值等价，但这里省四行代码。**改口径必须按键**（走 bset_apply 的推导），
- * 所以下面那两下是真的按 OK。 */
+ * 注意：直接写 `app.bset_row` 而不按 K1/K2 —— 光标行是纯状态，按方向键与
+ * 赋值等价，此处省四行代码。**改口径必须按键**（走 bset_apply 的推导），
+ * 故下面那两下是真的按 OK。 */
 static void shot_bset(const char *path, uint16_t *win, int scale, double jd,
                       int night, int row, int local_cal, int solar_basis)
 {
@@ -270,15 +270,15 @@ static int dump_pages(const char *dir, double jd_start, int scale)
     }
 
     /* --- 一之二、设置页的每一个光标位置 ---
-     * 选中行是整行反色，行高是取整后的像素值逐行累加 —— 最后一行会不会
-     * 压到底部页码点上，只有渲出来才知道。往 UI_SET_* 里加一项时看这几张。 */
+     * 选中行是整行反色，行高是取整后的像素值逐行累加 —— 最后一行是否会
+     * 压到底部页码点上，只有渲出来才能确认。往 UI_SET_* 加项时看这几张。 */
     for (int r = 0; r < UI_SET_COUNT; r++) {
         snprintf(path, sizeof path, "%s/set_row%d.ppm", dir, r);
         shot(path, win, scale, jd_start, 1, UI_PAGE_SETTINGS, 0u, r, 0,
              SHOT_FEATURE_KEEP);
     }
-    /* 再来一遍「所有行都活着」的那套 —— 默认两行是变暗的，只拍默认那套
-     * 就永远看不到它们正常时的样子。 */
+    /* 再来一遍「所有行都有效」的那套 —— 默认两行是变暗的，只拍默认那套
+     * 就无法看到它们正常时的样子。 */
     for (int r = 0; r < UI_SET_COUNT; r++) {
         snprintf(path, sizeof path, "%s/set_live_row%d.ppm", dir, r);
         shot(path, win, scale, jd_start, 1, UI_PAGE_SETTINGS, 0u, r, 1,
@@ -287,8 +287,8 @@ static int dump_pages(const char *dir, double jd_start, int scale)
 
     /* --- 二、8 个月相 ---
      * 从下一个朔起每 3.69 天一张，正好把一个朔望月切成 8 个相位
-     * （0/45/90/.../315°）。之前我用「now + 14.77 天」当满月，结果那天
-     * 月亮其实是下弦 43% —— 满月压根没被拍到过。按真实朔取点才靠谱。 */
+     * （0/45/90/.../315°）。以「now + 14.77 天」当满月会取到下弦 43% 的位置，
+     * 漏掉满月。须按真实朔取点。 */
     double nm = sf_solve_lunar_phase(0.0, jd_start);
     if (!isfinite(nm) || nm < jd_start) nm = sf_solve_lunar_phase(0.0, jd_start + 29.53);
     if (isfinite(nm)) {
@@ -300,9 +300,9 @@ static int dump_pages(const char *dir, double jd_start, int scale)
     }
 
     /* --- 三、功能选择页 + 八字两页 ---
-     * ⚠️ 这两块**不在**上面那个 `page < UI_PAGE_COUNT` 的循环里：功能选择页
-     * 的 feature 是 -1、八字是另一个 feature，那个循环按定义覆盖不到。
-     * 加子页 / 加功能时，这一段的覆盖面要跟着长。 */
+     * 注意：这两块**不在**上面那个 `page < UI_PAGE_COUNT` 的循环里：功能选择
+     * 页的 feature 是 -1、八字是另一个 feature，那个循环按定义覆盖不到。
+     * 加子页 / 加功能时，这一段的覆盖面须同步扩展。 */
     for (int night = 0; night < 2; night++) {
         for (int pk = 0; pk < UI_FEATURE_COUNT; pk++) {
             snprintf(path, sizeof path, "%s/pick_%s_%d.ppm", dir,
@@ -315,16 +315,16 @@ static int dump_pages(const char *dir, double jd_start, int scale)
             shot_bazi(path, win, scale, jd_start, night, UI_BAZI_PAGE_CHART, m, 0, 0, 1, -1);
         }
     }
-    /* 出生信息页的每一个光标位（跟设置页同一个理由：最后一行会不会压到
-     * 底下那行提示、提示会不会压到页码点，只有渲出来才知道） */
+    /* 出生信息页的每一个光标位（同设置页的理由：最后一行是否会压到
+     * 底下那行提示、提示是否会压到页码点，只有渲出来才能确认） */
     for (int r = 0; r < UI_BIRTH_ROW_COUNT; r++) {
         snprintf(path, sizeof path, "%s/bazi_birth_row%d.ppm", dir, r);
         shot_bazi(path, win, scale, jd_start, 1, UI_BAZI_PAGE_BIRTH, 0, r, 0, 1, -1);
     }
-    /* 顶栏那个「方向 + 步长」：每行的每一档都拍一张。后缀的字不一样
-     * （年/月/日/时/分/m），右对齐之后会不会撞上左边的标题、会不会出屏，
-     * 只有渲出来才知道（宽度能算，但字距是逐字累加的，算不如渲）。
-     * 4 档是最大的那张表（偏移/分），多按了也只是绕回来。 */
+    /* 顶栏那个「方向 + 步长」：每行的每一档都拍一张。后缀的字不同
+     * （年/月/日/时/分/m），右对齐后是否会撞上左边的标题、是否会出屏，
+     * 只有渲出来才能确认（宽度可算，但字距是逐字累加的，算不如渲）。
+     * 4 档是最大的那张表（偏移/分），多按也只是绕回来。 */
     for (int r = 0; r < UI_BIRTH_ROW_COUNT; r++)
         for (int s = 0; s < 4; s++) {
             snprintf(path, sizeof path, "%s/bazi_birth_step%d_%d.ppm", dir, r, s);
@@ -336,10 +336,10 @@ static int dump_pages(const char *dir, double jd_start, int scale)
     snprintf(path, sizeof path, "%s/bazi_bad_date.ppm", dir);
     shot_bazi(path, win, scale, jd_start, 1, UI_BAZI_PAGE_CHART, 0, 0, 0, 1, -1);
     /* 没选性别的盘面：标题必须是「未选」、右上角「先选性别」——
-     * 原来这里会显示成「坤造」而大运那两列上不来（见 page_chart 的注）。
+     * 否则会显示成「坤造」而大运那两列上不来（见 page_chart 的注）。
      *
-     * ⚠️ 只拍 m0。m≥1 时那几下 K5 **会跳到出生信息页的性别行**（正是这一版
-     * 修的行为），拍到的是出生页 —— 所以后两张单独命名，当「K5 跳转」的证据。 */
+     * 注意：只拍 m0。m≥1 时那几下 K5 **会跳到出生信息页的性别行**，
+     * 拍到的是出生页 —— 故后两张单独命名，作为「K5 跳转」的证据。 */
     snprintf(path, sizeof path, "%s/bazi_chart_nogender.ppm", dir);
     shot_bazi(path, win, scale, jd_start, 1, UI_BAZI_PAGE_CHART, 0, 0, 0, -1, -1);
     snprintf(path, sizeof path, "%s/bazi_nogender_k5.ppm", dir);
@@ -348,8 +348,8 @@ static int dump_pages(const char *dir, double jd_start, int scale)
     shot_bazi(path, win, scale, jd_start, 1, UI_BAZI_PAGE_CHART, 2, 0, 0, -1, -1);
 
     /* --- 三点五、运限页（五级联动）---
-     * 逐层展开 × 选到不同的卡。⚠️ 这一页的**满屏**（五层全开）是最坏情况：
-     * 五层 × 19 px + 顶栏 = 108，页码点在 121 —— 会不会压点只有渲出来才知道。 */
+     * 逐层展开 × 选到不同的卡。注意：这一页的**满屏**（五层全开）是最坏情况：
+     * 五层 × 19 px + 顶栏 = 108，页码点在 121 —— 是否压点只有渲出来才能确认。 */
     for (int open = 1; open <= UI_LUCK_LEVELS; open++) {
         const int sel0[UI_LUCK_LEVELS] = { 0, 0, 0, 0, 0 };
         snprintf(path, sizeof path, "%s/bazi_luck_open%d.ppm", dir, open);
@@ -373,8 +373,8 @@ static int dump_pages(const char *dir, double jd_start, int scale)
     }
 
     /* --- 四、八字设置页 ---
-     * 默认那套（六行里有三行**是灰的**）+ 「历法=当地天文」那套（它们活了）。
-     * 不拍后面这套，就永远看不到活着的样子 —— 而上游的规矩本来就是
+     * 默认那套（六行里有三行**是灰的**）+ 「历法=当地天文」那套（它们生效）。
+     * 不拍后面这套，就无法看到它们生效的样子 —— 上游的规则本来就是
      * 「默认全灰，要排外国的盘先把历法改成当地天文」。 */
     for (int r = 0; r < UI_BSET_COUNT; r++) {
         snprintf(path, sizeof path, "%s/bazi_bset_row%d.ppm", dir, r);
@@ -383,11 +383,10 @@ static int dump_pages(const char *dir, double jd_start, int scale)
         shot_bset(path, win, scale, jd_start, 1, r, 1, 0);
     }
     /* 排盘钟表=真太阳时：**出生地经度那行的失效判据与众不同**（它有两个
-     * 消费者 —— 日界和排盘钟表），这一张就是那条规则的证据 —— 历法还是
-     * 中国古历、日界还是固定偏移（日界那一行还是灰的），但经度已经活了。
-     * ⚠️ 那一行 2026-09-20 从这一页搬到了**出生信息页**（「你出生在哪儿」
-     * 跟年月日时是一伙的），所以证据也搬过去拍：光标压在经度行上，
-     * 值色是亮的 = 按得动。 */
+     * 消费者 —— 日界和排盘钟表），这一张即该规则的证据 —— 历法还是
+     * 中国古历、日界还是固定偏移（日界那一行还是灰的），但经度已经生效。
+     * 注意：该行位于**出生信息页**（与年月日时同属「出生在哪儿」），
+     * 故证据也在此拍：光标压在经度行上，值色是亮的 = 按得动。 */
     snprintf(path, sizeof path, "%s/bazi_bset_solar_row%d.ppm", dir, UI_BSET_TIME_BASIS);
     shot_bset(path, win, scale, jd_start, 1, UI_BSET_TIME_BASIS, 0, 1);
     snprintf(path, sizeof path, "%s/bazi_birth_solar_meridian.ppm", dir);
@@ -396,7 +395,7 @@ static int dump_pages(const char *dir, double jd_start, int scale)
 
     free(win);
 
-    /* 字库够不够，用数字说话：任何一次画不出来的字形都会计数 */
+    /* 字库是否够用，以数字说明：任何一次画不出来的字形都会计数 */
     const int miss = ui_missing_glyphs();
     printf("漏字 %d 个%s\n", miss,
            miss ? " —— 改了 UI 文字没重跑 `make font`？" : " ✓");
@@ -475,7 +474,7 @@ int main(int argc, char **argv)
 
     ui_init(&g_fb[0][0]);
 
-    g_view_year = year;      /* ⚠️ 必须在下面 dump 那条 return **之前**赋值 */
+    g_view_year = year;      /* 注意：必须在下面 dump 那条 return **之前**赋值 */
     if (dump) {
         const double jd = isfinite(at) ? sf_utc_to_tt(at) : sim_now_jd_tt();
         printf("无头渲染 → %s\n", dump);
@@ -513,20 +512,20 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* --at 换算成偏移量，这样时钟还是接着走的，不是冻在那儿。
-     * ⚠️ at 是 UTC，sim_now_jd_tt() 是 TT —— 两边都得是 TT 才能相减。 */
+    /* --at 换算成偏移量，使时钟继续走动而非冻结。
+     * 注意：at 是 UTC，sim_now_jd_tt() 是 TT —— 两边都须是 TT 才能相减。 */
     if (isfinite(at)) g_offset_days = sf_utc_to_tt(at) - sim_now_jd_tt();
 
     ui_app app;
     ui_app_init(&app, sim_now_jd_tt());
-    /* ⚠️ 走 setter，别无脑写 cal_cfg.utc_offset_minutes：默认历法是「中国古历」，
+    /* 注意：走 setter，不得直接写 cal_cfg.utc_offset_minutes：默认历法是「中国古历」，
      * 那把锁会把生效值钉在 +480，直接写等于绕过它。 */
     ui_app_set_utc_offset(&app, utc_min);
     ui_app_set_observer(&app, lat, lon);
     app.page = page;
     if (year) ui_app_set_view_year(&app, year);
     if (!night) {
-        /* 用一次 ACT 把主题翻过来，免得另开一条设置路径 */
+        /* 用一次 ACT 把主题翻过来，避免另开一条设置路径 */
         ui_app_button(&app, UI_BTN_ACT, 1);
     }
 
