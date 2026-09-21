@@ -1,0 +1,8 @@
+# 构建产物
+*.o
+sim
+*.dSYM/
+.DS_Store
+
+# 预览生成文件
+/tmp/ui_font_preview.png
