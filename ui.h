@@ -24,6 +24,7 @@
 #include "sf_calendar.h"
 #include "sf_qishuo.h"
 #include "sf_rise.h"
+#include "sf_yijing.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,6 +98,7 @@ void ui_init(uint16_t *fb);          /* 调用方给缓冲（MCU 上就是 DMA �
 const uint16_t *ui_fb(void);
 
 void ui_clear(uint16_t c);
+void ui_clip_y(int y0, int y1); /* [y0,y1)，切页过渡；用完须恢复全屏 */
 void ui_px(int x, int y, uint16_t c);
 void ui_fill(ui_rect r, uint16_t c);
 void ui_frame(ui_rect r, uint16_t c);
@@ -172,14 +174,19 @@ extern const char *const ui_btn_names[UI_BTN_COUNT];
  * 两级页面：**功能 → 子页**
  *
  * 开机停在**功能选择页**（feature == -1），选一个功能进去；在功能里按
- * BACK 逐级退回。`page` 是**当前功能内**的子页号，两个功能的子页枚举
+ * BACK 逐级退回。`page` 是**当前功能内**的子页号，各功能的子页枚举
  * 各自从 0 起，靠 `feature` 区分。
  * ------------------------------------------------------------------ */
 typedef enum {
     UI_FEATURE_CALENDAR = 0,   /* 万年历：照旧那六页 */
     UI_FEATURE_BAZI,           /* 八字：出生信息 → 排盘 */
+    UI_FEATURE_MEIHUA,         /* 梅花：农历时间 / 单数 / 双数 */
+    UI_FEATURE_LIUYAO,         /* 六爻：起卦 / 神煞 */
     UI_FEATURE_COUNT
 } ui_feature;
+
+/* 选择主页的最后一项是操作，不是可进入的功能。 */
+enum { UI_PICK_CLEAR = UI_FEATURE_COUNT, UI_PICK_COUNT = UI_FEATURE_COUNT + 1 };
 
 typedef enum {
     UI_PAGE_TODAY = 0,   /* 今：当前节气 + 农历 + 月相 + 倒计时 */
@@ -197,6 +204,29 @@ enum {
     UI_BAZI_PAGE_LUCK,         /* 运限：大运→流年→流月→流日→流时 */
     UI_BAZI_PAGE_SETTINGS,     /* 八字自己的口径（跟万年历那套独立） */
     UI_BAZI_PAGE_COUNT
+};
+
+enum {
+    UI_MEIHUA_PAGE_PICK = 0,   /* 农历时间 / 报数 */
+    UI_MEIHUA_PAGE_TIME,       /* 农历时间起卦结果 */
+    UI_MEIHUA_PAGE_MODE,       /* 报数：单数 / 双数 */
+    UI_MEIHUA_PAGE_NUMBERS,    /* 报数输入及结果 */
+    UI_MEIHUA_PAGE_CAST_TIME,  /* 起卦时间编辑 */
+    UI_MEIHUA_PAGE_COUNT
+};
+
+enum {
+    UI_LIUYAO_PAGE_CHART = 0,
+    UI_LIUYAO_PAGE_SHENSHA,
+    UI_LIUYAO_PAGE_CAST_TIME,
+    UI_LIUYAO_PAGE_COUNT
+};
+
+enum {
+    UI_CAST_SLIDE_FRAMES = 7,
+    UI_CAST_LAND_FRAMES = 6,
+    UI_CAST_REVEAL_FRAMES = 4,
+    UI_CAST_EXIT_FRAMES = 8
 };
 
 /* 运限链的层。注意：顺序即链的方向（浅→深），数组下标直接使用。 */
@@ -237,7 +267,7 @@ enum {
     UI_BSET_COUNT
 };
 
-/* `scroll[]` 按**子页**索引，两个功能的子页共用一张表，所以维度取较大者。
+/* `scroll[]` 按**子页**索引，各功能的子页共用一张表，所以维度取较大者。
  * 注意：加子页时这里会自动跟着长，但**不得超过** UI_PAGE_COUNT，
  * 否则日历那边会空出一段永远用不到的表项（不致命，只是浪费）。 */
 /* 注意：两个枚举都必须显式转 int 再比较：GCC（ESP-IDF 的编译器）将
@@ -385,7 +415,8 @@ typedef struct {
 
     /* --- 两级页面（见上面 ui_feature 那一段） --- */
     int    feature;            /* ui_feature；**-1 = 停在功能选择页** */
-    int    pick;               /* 选择页上高亮的卡片 0..UI_FEATURE_COUNT-1 */
+    int    pick;               /* 选择页上高亮的卡片 0..UI_PICK_COUNT-1 */
+    int    clear_confirm;      /* 0 主页、1 待确认、2 已清空 */
     int    page;
     int    scroll[UI_SUBPAGE_MAX];
     int    night;              /* 主题开关 */
@@ -418,6 +449,8 @@ typedef struct {
      * 且这组**不随「现在」变**，只在 view_year / 配置改动时分别置 dirty；
      * 进入哪一页才重建哪一张表。 */
     int    view_year;                  /* 选中年份（公历），默认当前年 */
+    int    year_step_idx;              /* 气朔年份档位，与设置页独立 */
+    int    year_jump_pending;          /* 回今后待年表加载再定位：0/页号 */
     int    year_term_dirty;            /* 置 1：节气页首次进入时重建 */
     int    year_phase_dirty;           /* 置 1：朔望页首次进入时重建 */
     /* 气朔精度档（sf_qishuo_accuracy，默认 HIGH = 库原来的全量预算）。
@@ -476,6 +509,42 @@ typedef struct {
      * 下标，各行自行夹取 —— 故它在行与行之间没有可比性，不得当全局状态存。 */
     int     step_idx;          /* 当前步长档，进该行的档位表，越界就夹住 */
     int     step_plus;         /* 1 = 加，0 = 减（ACT 键切换） */
+
+    /* 梅花/六爻：仅数值与短结果；经文不放进固件。 */
+    int     meihua_first, meihua_second, meihua_row, meihua_step;
+    int     meihua_pick;       /* 0 农历时间、1 报数 */
+    int     meihua_mode;       /* 0 单数（配当前时辰）、1 双数 */
+    double  meihua_cast_jd_ut, liuyao_cast_jd_ut;
+    int     meihua_cast_fixed, liuyao_cast_fixed; /* 0 跟随现在 */
+    sf_lunar_date yijing_lunar;
+    sf_ganzhi_pillars yijing_pillars;
+    int     yijing_lunar_ok, yijing_pillars_ok, yijing_cast_hour;
+    /* 两个功能共用编辑器，但保存的占时互不干扰。 */
+    int     cast_input_lunar, cast_row, cast_step, cast_error, cast_dirty;
+    int     cast_year, cast_month, cast_day, cast_hour, cast_minute, cast_leap;
+    int     cast_month_name, cast_return_page;
+    double  yijing_cached_lunar_day, yijing_cached_pillar_minute;
+    sf_cal_config yijing_cached_cfg;
+    int     yijing_cached_time_basis, yijing_cached_rat_hour;
+    double  yijing_cached_observer_lon;
+    int     liuyao_row;
+    uint8_t liuyao_lines[6];  /* 初爻到上爻，6/7/8/9 */
+    int     liuyao_cast_active; /* K7 两按一爻的起卦画面 */
+    int     liuyao_cast_count;  /* 已定爻数，0..6 */
+    int     liuyao_cast_spinning;
+    unsigned liuyao_cast_frame;
+    unsigned liuyao_cast_slide;  /* 硬币升到下一爻，0..UI_CAST_SLIDE_FRAMES */
+    unsigned liuyao_cast_land;   /* 停摇后翻落，结束才显示币面 */
+    unsigned liuyao_cast_reveal; /* 停币后由左向右显爻 */
+    int      liuyao_cast_exiting; /* K5：起卦画面 → 纳甲盘 */
+    unsigned liuyao_cast_exit_frame;
+    uint8_t liuyao_coin_faces[3]; /* 1 阳、0 阴，最近一次落定 */
+    uint8_t liuyao_cast_backup[6]; /* 中途退出时恢复原卦 */
+    int     yijing_ok;
+    int     yijing_kong_ok;
+    sf_meihua_chart meihua_chart;
+    sf_liuyao_chart liuyao_chart;
+    sf_liuyao_four_shensha yijing_shensha;
 
     /* 月历网格：当前这个农历月 */
     int     grid_days;        /* 29 或 30 */
@@ -621,6 +690,9 @@ double ui_app_step_magnitude(const ui_app *a);
 
 /* 气/朔两页显示哪一年。真机从 NVS 恢复设置时走这个入口。 */
 void ui_app_set_view_year(ui_app *a, int year);
+
+/* 六爻页 K7：两按一爻；仅停币时从宿主随机源取三枚硬币。 */
+int ui_app_yijing_cast_press(ui_app *a, sf_liuyao_random_u32 next, void *ctx);
 
 /* 画一帧。非 const：会把 flash 计数往下走。 */
 void ui_render(ui_app *a);

@@ -6,6 +6,7 @@
  * 「取当前时间」，以便原样移植到 MCU 换成 RTC。
  * ================================================================== */
 #include <math.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,19 @@ static uint16_t g_fb[UI_H][UI_W];       /* 真机上这就是 DMA 出去的缓�
 
 static double g_offset_days;            /* 时间旅行偏移，只影响显示 */
 static int    g_view_year;              /* --year：气/朔两页看哪一年，0 = 当前年 */
+
+static uint32_t sim_random_u32(void *ctx)
+{
+    (void)ctx;
+    return arc4random();
+}
+
+static uint32_t cast_demo_u32(void *ctx)
+{
+    uint32_t *state = ctx;
+    *state = *state * 1664525u + 1013904223u;
+    return *state >> 16;
+}
 
 /* 当前时刻。系统钟给的是 **UTC**，转成 TT —— solar_fast 全部按 TT。
  *
@@ -56,7 +70,7 @@ static void usage(const char *argv0)
            "  --at 日期   从指定时刻开始，格式 2026-09-19 或 2026-09-19T06:41\n"
            "  --page N    开在哪一页。万年历 0..5（默认 0 = 主页；5 = 设置）；\n"
            "              八字 0 = 出生信息、1 = 盘、2 = 运限、3 = 八字设置\n"
-           "  --feature N 开在哪个功能 -1 = 选择页、0 = 万年历、1 = 八字\n"
+           "  --feature N 开在哪个功能 -1 = 选择页、0 = 万年历、1 = 八字、2 = 梅花、3 = 六爻\n"
            "  --year N    气/朔两页看哪一年（默认当前年）\n"
            "  --dump 目录 不开窗口，渲染全部页面 + 8 个月相成 PPM 后退出\n"
            "  --lat 纬度   观者纬度，北正（默认 39.9042）\n"
@@ -105,6 +119,15 @@ static void shot(const char *path, uint16_t *win, int scale, double jd,
     if (feature != SHOT_FEATURE_KEEP) app.feature = feature;
     else                               app.feature = UI_FEATURE_CALENDAR;
     app.page = page;
+    if (feature == UI_FEATURE_MEIHUA && page == UI_MEIHUA_PAGE_CAST_TIME) {
+        app.page = UI_MEIHUA_PAGE_PICK;
+        ui_app_button(&app, UI_BTN_DOWN, 1);
+        ui_app_button(&app, UI_BTN_DOWN, 1);
+        ui_app_button(&app, UI_BTN_OK, 1);
+    } else if (feature == UI_FEATURE_LIUYAO && page == UI_LIUYAO_PAGE_CAST_TIME) {
+        app.page = UI_LIUYAO_PAGE_SHENSHA;
+        ui_app_button(&app, UI_BTN_RIGHT, 1);
+    }
     if (g_view_year) ui_app_set_view_year(&app, g_view_year);
     if (set_row >= 0 || live) {
         /* 注意：不得直接写 app.set_row —— 那样会绕过 settings_keep_visible，
@@ -142,6 +165,82 @@ static void shot_pick(const char *path, uint16_t *win, int scale, double jd,
     ui_render(&app);
     sim_frame_compose(win, scale, ui_fb(), 1u << UI_BTN_OK);
     write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+}
+
+/* 同一套 K7 状态机拍起卦过程，不用假造一张静态概念图。 */
+static void shot_cast(const char *dir, uint16_t *win, int scale, double jd,
+                      int night)
+{
+    ui_app app;
+    uint32_t seed = 20260924u;
+    char path[512];
+    ui_app_init(&app, jd);
+    if (!night) ui_app_button(&app, UI_BTN_ACT, 1);
+    app.feature = UI_FEATURE_LIUYAO;
+    app.page = UI_LIUYAO_PAGE_CHART;
+    (void)ui_app_yijing_cast_press(&app, cast_demo_u32, &seed);
+    assert(app.liuyao_cast_active && !app.liuyao_cast_spinning);
+    assert(app.liuyao_cast_count == 0 && seed == 20260924u);
+    ui_render(&app);
+    sim_frame_compose(win, scale, ui_fb(), 1u << UI_BTN_MENU);
+    snprintf(path, sizeof path, "%s/yijing_cast_%s_ready.ppm", dir,
+             night ? "night" : "day");
+    write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+    for (int stage = 0; stage < 12; stage++) {
+        const uint32_t before = seed;
+        (void)ui_app_yijing_cast_press(&app, cast_demo_u32, &seed);
+        assert(app.liuyao_cast_active);
+        assert(app.liuyao_cast_count == (stage + 1) / 2);
+        assert(app.liuyao_cast_spinning == ((stage & 1) == 0));
+        if ((stage & 1) == 0) assert(seed == before); /* 摇动不抽随机数 */
+        else {
+            assert(seed != before);
+            assert(app.liuyao_lines[stage / 2] >= 6);
+            assert(app.liuyao_lines[stage / 2] <= 9);
+        }
+        for (int f = 0; f < (app.liuyao_cast_spinning ? 4 :
+                            UI_CAST_LAND_FRAMES + UI_CAST_REVEAL_FRAMES); f++) {
+            ui_app_tick(&app, jd);
+            if (stage == 1 && f == 2) {
+                ui_render(&app);
+                sim_frame_compose(win, scale, ui_fb(), 0);
+                snprintf(path, sizeof path, "%s/yijing_cast_%s_landing.ppm", dir,
+                         night ? "night" : "day");
+                write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+            }
+        }
+        ui_render(&app);
+        sim_frame_compose(win, scale, ui_fb(), 1u << UI_BTN_MENU);
+        snprintf(path, sizeof path, "%s/yijing_cast_%s_%02d.ppm", dir,
+                 night ? "night" : "day", stage);
+        write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+    }
+    ui_app_button(&app, UI_BTN_OK, 1);
+    assert(app.liuyao_cast_exiting);
+    for (int frame = 0; frame < UI_CAST_EXIT_FRAMES; frame++) {
+        ui_app_tick(&app, jd);
+        ui_render(&app);
+        sim_frame_compose(win, scale, ui_fb(), 0);
+        snprintf(path, sizeof path, "%s/yijing_cast_%s_transition_%02d.ppm", dir,
+                 night ? "night" : "day", frame);
+        write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+    }
+    assert(!app.liuyao_cast_active && !app.liuyao_cast_exiting);
+    ui_app_tick(&app, jd);
+    ui_render(&app);
+    sim_frame_compose(win, scale, ui_fb(), 1u << UI_BTN_OK);
+    snprintf(path, sizeof path, "%s/yijing_cast_%s_result.ppm", dir,
+             night ? "night" : "day");
+    write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+    uint8_t saved[6];
+    memcpy(saved, app.liuyao_lines, sizeof saved);
+    (void)ui_app_yijing_cast_press(&app, cast_demo_u32, &seed);
+    (void)ui_app_yijing_cast_press(&app, cast_demo_u32, &seed);
+    assert(app.liuyao_cast_active && app.liuyao_cast_spinning);
+    assert(app.liuyao_cast_count == 0);
+    ui_app_button(&app, UI_BTN_BACK, 1);
+    assert(!app.liuyao_cast_active);
+    assert(memcmp(saved, app.liuyao_lines, sizeof saved) == 0);
 }
 
 /* 八字两页。出生信息须**先填入**再拍，且它与 shot() 的参数集差异较大，
@@ -304,16 +403,169 @@ static int dump_pages(const char *dir, double jd_start, int scale)
      * 页的 feature 是 -1、八字是另一个 feature，那个循环按定义覆盖不到。
      * 加子页 / 加功能时，这一段的覆盖面须同步扩展。 */
     for (int night = 0; night < 2; night++) {
-        for (int pk = 0; pk < UI_FEATURE_COUNT; pk++) {
+        for (int pk = 0; pk < UI_PICK_COUNT; pk++) {
             snprintf(path, sizeof path, "%s/pick_%s_%d.ppm", dir,
                      night ? "night" : "day", pk);
             shot_pick(path, win, scale, jd_start, night, pk);
+        }
+        {
+            ui_app probe;
+            ui_app_init(&probe, jd_start);
+            if (night) ui_app_button(&probe, UI_BTN_ACT, 1);
+            probe.meihua_first = 88;
+            probe.meihua_second = 99;
+            probe.meihua_cast_fixed = 1;
+            probe.liuyao_cast_fixed = 1;
+            probe.liuyao_lines[0] = 9;
+            probe.liuyao_cast_active = 1;
+            probe.liuyao_cast_count = 2;
+            const double saved_jd = probe.jd;
+            const int saved_birth_year = probe.birth.year;
+            const int saved_offset = probe.cal_cfg.utc_offset_minutes;
+            for (int k = 0; k < UI_PICK_CLEAR; k++)
+                ui_app_button(&probe, UI_BTN_DOWN, 1);
+            assert(probe.pick == UI_PICK_CLEAR);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.feature == -1 && probe.clear_confirm == 1);
+            snprintf(path, sizeof path, "%s/clear_confirm_%s.ppm", dir,
+                     night ? "night" : "day");
+            ui_render(&probe);
+            sim_frame_compose(win, scale, ui_fb(), 0);
+            write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.clear_confirm == 0 && probe.meihua_first == 88);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.clear_confirm == 2);
+            assert(probe.meihua_first == 1 && probe.meihua_second == 2);
+            assert(!probe.meihua_cast_fixed && !probe.liuyao_cast_fixed);
+            assert(probe.liuyao_lines[0] == 7 && !probe.liuyao_cast_active);
+            assert(probe.jd == saved_jd && probe.birth.year == saved_birth_year);
+            assert(probe.cal_cfg.utc_offset_minutes == saved_offset);
+            snprintf(path, sizeof path, "%s/clear_done_%s.ppm", dir,
+                     night ? "night" : "day");
+            ui_render(&probe);
+            sim_frame_compose(win, scale, ui_fb(), 0);
+            write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
         }
         for (int m = 0; m < 3; m++) {          /* 盘面的三种列数：4/5/6 */
             snprintf(path, sizeof path, "%s/bazi_chart_%s_m%d.ppm", dir,
                      night ? "night" : "day", m);
             shot_bazi(path, win, scale, jd_start, night, UI_BAZI_PAGE_CHART, m, 0, 0, 1, -1);
         }
+        for (int page = 0; page < UI_MEIHUA_PAGE_COUNT; page++) {
+            snprintf(path, sizeof path, "%s/meihua_%s_p%d.ppm", dir,
+                     night ? "night" : "day", page);
+            shot(path, win, scale, jd_start, night, page, 0u, -1, 0,
+                 UI_FEATURE_MEIHUA);
+        }
+        for (int mode = 0; mode < 2; mode++) {
+            ui_app probe;
+            ui_app_init(&probe, jd_start);
+            probe.feature = UI_FEATURE_MEIHUA;
+            probe.page = UI_MEIHUA_PAGE_PICK;
+            ui_app_button(&probe, UI_BTN_DOWN, 1); /* 报数 */
+            ui_app_button(&probe, UI_BTN_OK, 1);   /* 单/双数选择 */
+            assert(probe.page == UI_MEIHUA_PAGE_MODE);
+            if (mode) ui_app_button(&probe, UI_BTN_DOWN, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_NUMBERS);
+            assert(probe.meihua_mode == mode);
+            if (!night) ui_app_button(&probe, UI_BTN_ACT, 1);
+            ui_app_tick(&probe, jd_start);
+            ui_render(&probe);
+            sim_frame_compose(win, scale, ui_fb(), 0);
+            snprintf(path, sizeof path, "%s/meihua_%s_%s.ppm", dir,
+                     night ? "night" : "day", mode ? "double" : "single");
+            write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_MODE);
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_PICK);
+        }
+        for (int page = 0; page < UI_LIUYAO_PAGE_COUNT; page++) {
+            snprintf(path, sizeof path, "%s/liuyao_%s_p%d.ppm", dir,
+                     night ? "night" : "day", page);
+            shot(path, win, scale, jd_start, night, page, 0u, -1, 0,
+                 UI_FEATURE_LIUYAO);
+        }
+        if (!night) {
+            ui_app probe;
+            ui_app_init(&probe, jd_start);
+            probe.feature = UI_FEATURE_LIUYAO;
+            probe.page = UI_LIUYAO_PAGE_CHART;
+            ui_app_tick(&probe, jd_start);
+            ui_app_prepare_visible(&probe);
+            const sf_ganzhi old_day = probe.yijing_pillars.day;
+            ui_app_button(&probe, UI_BTN_RIGHT, 1);
+            ui_app_button(&probe, UI_BTN_RIGHT, 1);
+            assert(probe.page == UI_LIUYAO_PAGE_CAST_TIME);
+            probe.cast_year = 2024; probe.cast_month = 2; probe.cast_day = 10;
+            probe.cast_hour = 8; probe.cast_minute = 30;
+            probe.cast_dirty = 1;
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.liuyao_cast_fixed && probe.page == UI_LIUYAO_PAGE_SHENSHA);
+            ui_app_prepare_visible(&probe);
+            assert(probe.yijing_pillars_ok && probe.yijing_pillars.day != old_day);
+            assert(probe.yijing_ok && probe.yijing_shensha.kong_wang[0] < 12);
+            const sf_ganzhi fixed_day = probe.yijing_pillars.day;
+            ui_app_tick(&probe, jd_start + 7);
+            ui_app_prepare_visible(&probe);
+            assert(probe.yijing_pillars.day == fixed_day);
+
+            probe.feature = UI_FEATURE_MEIHUA;
+            probe.page = UI_MEIHUA_PAGE_PICK;
+            ui_app_button(&probe, UI_BTN_DOWN, 1);
+            ui_app_button(&probe, UI_BTN_DOWN, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_CAST_TIME);
+            probe.cast_year = 2024; probe.cast_month = 2; probe.cast_day = 10;
+            probe.cast_hour = 8; probe.cast_minute = 30;
+            probe.cast_dirty = 1;
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.meihua_cast_fixed && probe.liuyao_cast_fixed);
+            probe.page = UI_MEIHUA_PAGE_TIME;
+            ui_app_prepare_visible(&probe);
+            assert(probe.yijing_ok && probe.yijing_lunar_ok);
+            assert(probe.yijing_cast_hour == 8);
+            assert(probe.yijing_lunar.year == 2024 && probe.yijing_lunar.month == 1
+                   && probe.yijing_lunar.day == 1);
+        }
+        if (!night) {
+            ui_app probe;
+            ui_app_init(&probe, jd_start);
+            probe.feature = UI_FEATURE_MEIHUA;
+            probe.page = UI_MEIHUA_PAGE_TIME;
+            ui_app_prepare_visible(&probe);
+            const int old_hour = probe.yijing_cast_hour;
+            ui_app_button(&probe, UI_BTN_BACK, 1); /* 农历起卦 → 选择 */
+            ui_app_button(&probe, UI_BTN_DOWN, 1);
+            ui_app_button(&probe, UI_BTN_DOWN, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1); /* 占时编辑 */
+            assert(probe.page == UI_MEIHUA_PAGE_CAST_TIME);
+            ui_app_button(&probe, UI_BTN_BACK, 1); /* 未修改不冻结 */
+            assert(!probe.meihua_cast_fixed && probe.page == UI_MEIHUA_PAGE_PICK);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_CAST_TIME);
+            probe.cast_row = 5; /* 时 */
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.cast_dirty);
+            snprintf(path, sizeof path, "%s/cast_save_hint.ppm", dir);
+            ui_render(&probe);
+            sim_frame_compose(win, scale, ui_fb(), 0);
+            write_ppm(path, win, sim_frame_width(scale), sim_frame_height(scale));
+            ui_app_button(&probe, UI_BTN_BACK, 1);
+            assert(probe.meihua_cast_fixed && probe.page == UI_MEIHUA_PAGE_PICK);
+            ui_app_button(&probe, UI_BTN_UP, 1);
+            ui_app_button(&probe, UI_BTN_UP, 1);
+            ui_app_button(&probe, UI_BTN_OK, 1);
+            assert(probe.page == UI_MEIHUA_PAGE_TIME);
+            ui_app_prepare_visible(&probe);
+            assert(probe.yijing_ok);
+            assert(probe.yijing_cast_hour == (old_hour + 2) % 24);
+        }
+        shot_cast(dir, win, scale, jd_start, night);
     }
     /* 出生信息页的每一个光标位（同设置页的理由：最后一行是否会压到
      * 底下那行提示、提示是否会压到页码点，只有渲出来才能确认） */
@@ -419,6 +671,7 @@ int main(int argc, char **argv)
 {
     int scale  = SIM_DEFAULT_SCALE;
     int page   = UI_PAGE_TODAY;
+    int feature = -2;             /* -2 = 默认功能选择页 */
     int year   = 0;                 /* 0 = 用当前年 */
     int night  = 1;
     int selftest = 0;
@@ -440,6 +693,8 @@ int main(int argc, char **argv)
             if (!isfinite(at)) { fprintf(stderr, "看不懂的日期：%s\n", argv[i]); return 2; }
         } else if (!strcmp(argv[i], "--page") && i + 1 < argc) {
             page = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--feature") && i + 1 < argc) {
+            feature = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--year") && i + 1 < argc) {
             year = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--dump") && i + 1 < argc) {
@@ -470,7 +725,15 @@ int main(int argc, char **argv)
     if (scale < 1) scale = 1;
     if (scale > 8) scale = 8;
     if (page < 0) page = 0;
-    if (page >= UI_PAGE_COUNT) page = UI_PAGE_COUNT - 1;
+    if (feature < -2 || feature >= UI_FEATURE_COUNT) {
+        fprintf(stderr, "无效功能编号：%d\n", feature);
+        return 2;
+    }
+    const int page_count = feature == UI_FEATURE_MEIHUA ? UI_MEIHUA_PAGE_COUNT
+                         : feature == UI_FEATURE_LIUYAO ? UI_LIUYAO_PAGE_COUNT
+                         : feature == UI_FEATURE_BAZI ? UI_BAZI_PAGE_COUNT
+                         : UI_PAGE_COUNT;
+    if (page >= page_count) page = page_count - 1;
 
     ui_init(&g_fb[0][0]);
 
@@ -523,6 +786,16 @@ int main(int argc, char **argv)
     ui_app_set_utc_offset(&app, utc_min);
     ui_app_set_observer(&app, lat, lon);
     app.page = page;
+    if (feature != -2) app.feature = feature;
+    if (feature == UI_FEATURE_MEIHUA && page == UI_MEIHUA_PAGE_CAST_TIME) {
+        app.page = UI_MEIHUA_PAGE_PICK;
+        ui_app_button(&app, UI_BTN_DOWN, 1);
+        ui_app_button(&app, UI_BTN_DOWN, 1);
+        ui_app_button(&app, UI_BTN_OK, 1);
+    } else if (feature == UI_FEATURE_LIUYAO && page == UI_LIUYAO_PAGE_CAST_TIME) {
+        app.page = UI_LIUYAO_PAGE_SHENSHA;
+        ui_app_button(&app, UI_BTN_RIGHT, 1);
+    }
     if (year) ui_app_set_view_year(&app, year);
     if (!night) {
         /* 用一次 ACT 把主题翻过来，避免另开一条设置路径 */
@@ -546,7 +819,12 @@ int main(int argc, char **argv)
             case SIM_EV_BUTTON:
                 if (ev.val) pressed |=  (1u << ev.id);
                 else        pressed &= ~(1u << ev.id);
-                ui_app_button(&app, (ui_btn)ev.id, ev.val);
+                if (ev.val && ev.id == UI_BTN_MENU
+                    && app.feature == UI_FEATURE_LIUYAO
+                    && app.page == UI_LIUYAO_PAGE_CHART)
+                    (void)ui_app_yijing_cast_press(&app, sim_random_u32, NULL);
+                else
+                    ui_app_button(&app, (ui_btn)ev.id, ev.val);
                 break;
 
             case SIM_EV_ZOOM:  h->zoom(ev.val);            break;

@@ -374,9 +374,162 @@ static double calendar_day_offset(const ui_app *a)
          : a->cal_cfg.utc_offset_minutes / 1440.0;
 }
 
+static double cast_selected_ut(const ui_app *a)
+{
+    if (a->feature == UI_FEATURE_MEIHUA && a->meihua_cast_fixed)
+        return a->meihua_cast_jd_ut;
+    if (a->feature == UI_FEATURE_LIUYAO && a->liuyao_cast_fixed)
+        return a->liuyao_cast_jd_ut;
+    return sf_tt_to_ut(a->jd);
+}
+
+static int cast_solar_date(const ui_app *a, sf_solar_date *out)
+{
+    const int64_t day = sf_cal_civil_day_number(cast_selected_ut(a),
+                                                calendar_day_offset(a));
+    int32_t y, m, d;
+    sf_solar_date_from_day_number(day, &y, &m, &d);
+    out->year = y; out->month = (uint8_t)m; out->day = (uint8_t)d;
+    return 0;
+}
+
+static void cast_editor_open(ui_app *a, int page)
+{
+    sf_solar_date s;
+    cast_solar_date(a, &s);
+    a->cast_year = s.year; a->cast_month = s.month; a->cast_day = s.day;
+    const double local = cast_selected_ut(a) + calendar_day_offset(a);
+    ui_calendar_from_jd(local, NULL, NULL, NULL, &a->cast_hour,
+                        &a->cast_minute, NULL);
+    a->cast_input_lunar = 0;
+    a->cast_leap = 0;
+    a->cast_month_name = SF_MONTH_NAME_NORMAL;
+    a->cast_row = 0; a->cast_step = 0; a->cast_error = 0; a->cast_dirty = 0;
+    a->cast_return_page = a->page;
+    a->page = page;
+}
+
+static int cast_editor_solar(const ui_app *a, sf_solar_date *s)
+{
+    if (a->cast_month < 1 || a->cast_month > 12 || a->cast_day < 1
+        || a->cast_day > 31) return -1;
+    if (a->cast_input_lunar) {
+        sf_lunar_date l = {0};
+        l.year = a->cast_year; l.month = (uint8_t)a->cast_month;
+        l.day = (uint8_t)a->cast_day; l.is_leap = (uint8_t)a->cast_leap;
+        l.month_name = (uint8_t)a->cast_month_name;
+        return sf_cal_from_lunar(&a->cal_cfg, &l, s);
+    }
+    s->year = a->cast_year;
+    s->month = (uint8_t)a->cast_month;
+    s->day = (uint8_t)a->cast_day;
+    int32_t y, m, d;
+    sf_solar_date_from_day_number(sf_solar_day_number(s->year, s->month, s->day),
+                                  &y, &m, &d);
+    return y == s->year && m == s->month && d == s->day ? 0 : -1;
+}
+
+static int cast_editor_commit(ui_app *a)
+{
+    sf_solar_date s;
+    if (cast_editor_solar(a, &s) != 0) { a->cast_error = 1; return -1; }
+    const double ut = (double)sf_solar_day_number(s.year, s.month, s.day)
+        - 0.5 + (a->cast_hour * 60 + a->cast_minute) / 1440.0
+        - calendar_day_offset(a);
+    if (a->feature == UI_FEATURE_MEIHUA) {
+        a->meihua_cast_jd_ut = ut; a->meihua_cast_fixed = 1;
+    } else {
+        a->liuyao_cast_jd_ut = ut; a->liuyao_cast_fixed = 1;
+    }
+    a->cast_dirty = 0;
+    a->page = a->cast_return_page;
+    return 0;
+}
+
+static void cast_editor_button(ui_app *a, ui_btn b)
+{
+    if (b == UI_BTN_BACK) {
+        if (a->cast_dirty) (void)cast_editor_commit(a);
+        else a->page = a->cast_return_page;
+        return;
+    }
+    if (b == UI_BTN_UP || b == UI_BTN_DOWN) {
+        a->cast_row = (a->cast_row + (b == UI_BTN_DOWN ? 1 : 7)) % 8;
+        return;
+    }
+    if (b == UI_BTN_MENU) { a->cast_step = !a->cast_step; return; }
+    if (b == UI_BTN_ACT) { a->step_plus = !a->step_plus; return; }
+    if (b != UI_BTN_OK) return;
+    a->cast_error = 0;
+    const int step = (a->step_plus ? 1 : -1) * (a->cast_step ? 10 : 1);
+    if (a->cast_row == 0) {
+        sf_solar_date s;
+        if (cast_editor_solar(a, &s) != 0) { a->cast_error = 1; return; }
+        if (!a->cast_input_lunar) {
+            sf_lunar_date l;
+            if (sf_cal_from_solar(&a->cal_cfg, &s, &l) != 0)
+                { a->cast_error = 1; return; }
+            a->cast_year = l.year; a->cast_month = l.month; a->cast_day = l.day;
+            a->cast_leap = l.is_leap; a->cast_month_name = l.month_name;
+            a->cast_input_lunar = 1;
+        } else {
+            a->cast_year = s.year; a->cast_month = s.month; a->cast_day = s.day;
+            a->cast_input_lunar = 0;
+        }
+    } else if (a->cast_row == 1) {
+        a->cast_dirty = 1;
+        a->cast_year += step;
+        if (a->cast_year < -6000) a->cast_year = -6000;
+        if (a->cast_year > 10000) a->cast_year = 10000;
+        a->cast_month_name = SF_MONTH_NAME_NORMAL;
+    } else if (a->cast_row == 2) {
+        a->cast_dirty = 1;
+        a->cast_month += step > 0 ? 1 : -1;
+        if (a->cast_month < 1) a->cast_month = 12;
+        if (a->cast_month > 12) a->cast_month = 1;
+        a->cast_month_name = SF_MONTH_NAME_NORMAL;
+    } else if (a->cast_row == 3) {
+        if (a->cast_input_lunar) {
+            a->cast_leap = !a->cast_leap;
+            a->cast_dirty = 1;
+        }
+    } else if (a->cast_row == 4) {
+        a->cast_dirty = 1;
+        a->cast_day += step > 0 ? 1 : -1;
+        if (a->cast_day < 1) a->cast_day = 31;
+        if (a->cast_day > 31) a->cast_day = 1;
+    } else if (a->cast_row == 5) {
+        a->cast_dirty = 1;
+        a->cast_hour = (a->cast_hour + step + 240) % 24;
+    } else if (a->cast_row == 6) {
+        a->cast_dirty = 1;
+        a->cast_minute = (a->cast_minute + step + 600) % 60;
+    } else if (a->cast_row == 7) {
+        if (a->feature == UI_FEATURE_MEIHUA) a->meihua_cast_fixed = 0;
+        else a->liuyao_cast_fixed = 0;
+        a->cast_dirty = 0;
+        a->page = a->cast_return_page;
+    }
+}
+
 void ui_app_tick(ui_app *a, double jd_tt)
 {
     a->jd = jd_tt;
+    if (a->liuyao_cast_active) {
+        if (a->liuyao_cast_spinning) a->liuyao_cast_frame++;
+        if (a->liuyao_cast_slide < UI_CAST_SLIDE_FRAMES)
+            a->liuyao_cast_slide++;
+        if (!a->liuyao_cast_spinning && a->liuyao_cast_land < UI_CAST_LAND_FRAMES)
+            a->liuyao_cast_land++;
+        else if (!a->liuyao_cast_spinning
+                 && a->liuyao_cast_reveal < UI_CAST_REVEAL_FRAMES)
+            a->liuyao_cast_reveal++;
+    }
+    if (a->liuyao_cast_exiting
+        && ++a->liuyao_cast_exit_frame >= UI_CAST_EXIT_FRAMES) {
+        a->liuyao_cast_exiting = 0;
+        a->liuyao_cast_active = 0;
+    }
 
     /* 跨日只做失效标记。这个“日”与 sf_cal_from_instant_ut 一致：固定模式按
      * UTC 偏移，当地天文模式按历法经度；不在 tick 内重建数据。 */
@@ -451,6 +604,9 @@ void ui_app_init(ui_app *a, double jd_tt)
      * 先粗后细，跟「先翻到大致位置再微调」的用法一致。 */
     a->step_idx   = 0;
     a->step_plus  = 1;
+    a->meihua_first = 1;
+    a->meihua_second = 2;
+    for (int k = 0; k < 6; k++) a->liuyao_lines[k] = 7;
 
     /* 显示时区：用户值 +480。上面 init 出来的历法是「中国古历」，所以
      * apply_utc_lock 会把生效值也钉在 +480 —— 两条路殊途同归。 */
@@ -1093,9 +1249,9 @@ static const double *setting_steps(int row, int *n)
     }
 }
 
-/* 气/朔两页调的是**年份**。1 年一档够用，10 年一档用来跨远 ——
- * 默认就是今年，10 年档 4 下以内能回到 1990 年。 */
-static const double YEAR_STEPS[] = { 1, 10 };
+/* 气/朔要能覆盖整段年份。末档 0 是「回今」，K5 直接回当前年并定位；
+ * 不是数值步长，所以不能落入普通年份加减分支。 */
+static const double YEAR_STEPS[] = { 1, 10, 100, 1000, 0 };
 
 /* 「调一下」动的东西在**三处**：
  *   设置页 —— 光标那一行的设置项（setting_steps）
@@ -1111,7 +1267,7 @@ static const double YEAR_STEPS[] = { 1, 10 };
  *      档位不一致，换个页就得重新学。
  *
  * 每行都必须有表：`birth_apply` 里 `wrap_i(x + d, N)` 只加 d，缺表就只能 +1。 */
-static const double BIRTH_STEP_YEAR[]   = { 1, 10 };            /* 年 */
+static const double BIRTH_STEP_YEAR[]   = { 1, 10, 100, 1000 }; /* 年 */
 static const double BIRTH_STEP_MONTH[]  = { 1, 3, 6 };          /* 月，12 回环 */
 static const double BIRTH_STEP_DAY[]    = { 1, 5 };             /* 日，夹在 1..31 */
 static const double BIRTH_STEP_HOUR[]   = { 1, 6, 12 };         /* 时，24 回环 */
@@ -1173,15 +1329,24 @@ static int bazi_birth_slot(const ui_app *a)
     return a->feature == UI_FEATURE_BAZI && a->page == UI_BAZI_PAGE_BIRTH;
 }
 
+static int year_slot(const ui_app *a)
+{
+    return a->feature == UI_FEATURE_CALENDAR
+        && (a->page == UI_PAGE_TERMS || a->page == UI_PAGE_PHASES);
+}
+
 static int step_index(const ui_app *a)
 {
-    return bazi_birth_slot(a) ? a->birth_step_idx : a->step_idx;
+    if (bazi_birth_slot(a)) return a->birth_step_idx;
+    if (year_slot(a)) return a->year_step_idx;
+    return a->step_idx;
 }
 
 static void step_index_set(ui_app *a, int k)
 {
     if (bazi_birth_slot(a)) a->birth_step_idx = k;
-    else                    a->step_idx        = k;
+    else if (year_slot(a))  a->year_step_idx = k;
+    else                    a->step_idx = k;
 }
 
 static double magnitude_of(const ui_app *a, const double *st, int n)
@@ -1193,11 +1358,14 @@ static double magnitude_of(const ui_app *a, const double *st, int n)
 }
 
 /* 当前功能有几个子页。注意：通用分支里所有 `% N` 都必须走这里 ——
- * `page` 是两个功能共用的裸 int，UI_BAZI_PAGE_CHART(1) 会撞上
+ * `page` 是各功能共用的裸 int，UI_BAZI_PAGE_CHART(1) 会撞上
  * UI_PAGE_LUNAR(1)，拿 UI_PAGE_COUNT 去模会翻出界。 */
 static int subpage_count(const ui_app *a)
 {
-    return (a->feature == UI_FEATURE_BAZI) ? UI_BAZI_PAGE_COUNT : UI_PAGE_COUNT;
+    if (a->feature == UI_FEATURE_BAZI) return UI_BAZI_PAGE_COUNT;
+    if (a->feature == UI_FEATURE_MEIHUA) return UI_MEIHUA_PAGE_COUNT;
+    if (a->feature == UI_FEATURE_LIUYAO) return UI_LIUYAO_PAGE_COUNT;
+    return UI_PAGE_COUNT;
 }
 
 static int wrap_i(int v, int n)
@@ -1321,14 +1489,55 @@ static void year_step(ui_app *a)
     int n = 0;
     const double *st = active_steps(a, &n);
     const int mag = (int)lround(magnitude_of(a, st, n));
+    if (mag == 0) {
+        /* 与历法实际日界同口径，不能用显示时区或宿主机器的本地日期。 */
+        int32_t year = a->local_year_key;
+        if (year == INT32_MIN) {
+            const int64_t day = sf_cal_civil_day_number(
+                sf_tt_to_ut(a->jd), calendar_day_offset(a));
+            sf_solar_date_from_day_number(day, &year, NULL, NULL);
+        }
+        if (year >= SF_QISHUO_RANGE_START_YEAR && year <= SF_QISHUO_RANGE_END_YEAR) {
+            ui_app_set_view_year(a, year);
+            a->year_jump_pending = a->page;
+        }
+        a->flash = 6;
+        return;
+    }
     int y = a->view_year + (a->step_plus ? mag : -mag);
     if (y < SF_QISHUO_RANGE_START_YEAR) y = SF_QISHUO_RANGE_START_YEAR;
     if (y > SF_QISHUO_RANGE_END_YEAR) y = SF_QISHUO_RANGE_END_YEAR;
     if (y != a->view_year) {
         a->view_year = y;
         a->year_term_dirty = a->year_phase_dirty = 1;
+        a->scroll[a->page] = 0;
     }
+    a->year_jump_pending = 0;
     a->flash = 6;        /* 跟别的页按 OK 一样闪一下，确认按到了 */
+}
+
+/* 回今后等年表按需加载完，再把当前/下一事件放在屏幕中间附近。 */
+static void year_jump_scroll(ui_app *a)
+{
+    const int page = a->year_jump_pending;
+    if (page != a->page || (page != UI_PAGE_TERMS && page != UI_PAGE_PHASES)) return;
+    const ui_year_row *rows = page == UI_PAGE_TERMS ? a->year_term : a->year_phase;
+    const int count = page == UI_PAGE_TERMS ? a->year_term_n : a->year_phase_n;
+    int target = 0;
+    if (page == UI_PAGE_TERMS) {
+        for (int k = 0; k < count; k++)
+            if (rows[k].jd_tt <= a->jd) target = k;
+    } else {
+        target = count > 0 ? count - 1 : 0;
+        for (int k = 0; k < count; k++)
+            if (rows[k].jd_tt > a->jd) { target = k; break; }
+    }
+    int first = target - UI_LIST_ROWS / 2;
+    const int max = count > UI_LIST_ROWS ? count - UI_LIST_ROWS : 0;
+    if (first < 0) first = 0;
+    if (first > max) first = max;
+    a->scroll[page] = first;
+    a->year_jump_pending = 0;
 }
 
 /* 0.1° 按 32 下之后会攒出 116.79999999 这种尾巴，显示虽然四舍五入看不出来，
@@ -1524,6 +1733,95 @@ static void settings_keep_visible(ui_app *a)
     if (*s < 0) *s = 0;
 }
 
+int ui_app_yijing_cast_press(ui_app *a, sf_liuyao_random_u32 next, void *ctx)
+{
+    if (!a || a->feature != UI_FEATURE_LIUYAO
+        || a->page != UI_LIUYAO_PAGE_CHART || !next) return -1;
+    if (a->liuyao_cast_exiting) return 0;
+    if (a->liuyao_cast_active && !a->liuyao_cast_spinning
+        && (a->liuyao_cast_land < UI_CAST_LAND_FRAMES
+            || a->liuyao_cast_reveal < UI_CAST_REVEAL_FRAMES)) {
+        /* 落币期间再按一次只跳过动画，不重复掷币。 */
+        a->liuyao_cast_land = UI_CAST_LAND_FRAMES;
+        a->liuyao_cast_reveal = UI_CAST_REVEAL_FRAMES;
+        return 0;
+    }
+    if (!a->liuyao_cast_active || a->liuyao_cast_count == 6) {
+        for (int i = 0; i < 6; i++) a->liuyao_cast_backup[i] = a->liuyao_lines[i];
+        a->liuyao_cast_active = 1;
+        a->liuyao_cast_count = 0;
+        /* 首按只进入起卦页；下一按才摇初爻，不偷跑动画或随机数。 */
+        a->liuyao_cast_spinning = 0;
+        a->liuyao_cast_frame = 0;
+        a->liuyao_cast_slide = UI_CAST_SLIDE_FRAMES;
+        a->liuyao_cast_land = UI_CAST_LAND_FRAMES;
+        a->liuyao_cast_reveal = UI_CAST_REVEAL_FRAMES;
+        a->flash = 0;
+        return 0;
+    }
+    if (!a->liuyao_cast_spinning) {
+        a->liuyao_cast_spinning = 1;
+        a->liuyao_cast_frame = 0;
+        a->liuyao_cast_slide = 0;
+        a->liuyao_cast_land = UI_CAST_LAND_FRAMES;
+        a->liuyao_cast_reveal = UI_CAST_REVEAL_FRAMES;
+        return 0;
+    }
+    int heads = 0;
+    for (int i = 0; i < 3; i++) {
+        a->liuyao_coin_faces[i] = (uint8_t)(next(ctx) & 1u);
+        heads += a->liuyao_coin_faces[i];
+    }
+    a->liuyao_lines[a->liuyao_cast_count++] = (uint8_t)(6 + heads);
+    a->liuyao_cast_spinning = 0;
+    a->liuyao_cast_frame = 0;
+    a->liuyao_cast_slide = UI_CAST_SLIDE_FRAMES;
+    a->liuyao_cast_land = 0;
+    a->liuyao_cast_reveal = 0;
+    return 0;
+}
+
+/* 只清起卦的易失状态：时钟、历法设置、八字出生信息均不动。
+ * 不用 ui_app_init()，否则等于在 UI 里偷做了一次设备重启。 */
+static void clear_divination(ui_app *a)
+{
+    a->meihua_first = 1;
+    a->meihua_second = 2;
+    a->meihua_pick = 0;
+    a->meihua_mode = 0;
+    a->meihua_row = 0;
+    a->meihua_step = 0;
+    a->meihua_cast_fixed = 0;
+    a->meihua_cast_jd_ut = 0.0;
+    a->liuyao_cast_fixed = 0;
+    a->liuyao_cast_jd_ut = 0.0;
+    a->liuyao_row = 0;
+    for (int i = 0; i < 6; i++) a->liuyao_lines[i] = 7;
+    memset(a->liuyao_cast_backup, 0, sizeof a->liuyao_cast_backup);
+    memset(a->liuyao_coin_faces, 0, sizeof a->liuyao_coin_faces);
+    a->liuyao_cast_active = 0;
+    a->liuyao_cast_count = 0;
+    a->liuyao_cast_spinning = 0;
+    a->liuyao_cast_frame = 0;
+    a->liuyao_cast_slide = 0;
+    a->liuyao_cast_land = 0;
+    a->liuyao_cast_reveal = 0;
+    a->liuyao_cast_exiting = 0;
+    a->liuyao_cast_exit_frame = 0;
+    a->cast_input_lunar = 0;
+    a->cast_row = 0;
+    a->cast_step = 0;
+    a->cast_error = 0;
+    a->cast_dirty = 0;
+    a->yijing_ok = 0;
+    a->yijing_kong_ok = 0;
+    a->yijing_lunar_ok = 0;
+    a->yijing_pillars_ok = 0;
+    memset(&a->meihua_chart, 0, sizeof a->meihua_chart);
+    memset(&a->liuyao_chart, 0, sizeof a->liuyao_chart);
+    memset(&a->yijing_shensha, 0, sizeof a->yijing_shensha);
+}
+
 void ui_app_button(ui_app *a, ui_btn b, int pressed)
 {
     if (!pressed) return;                 /* 目前只吃按下沿 */
@@ -1532,22 +1830,133 @@ void ui_app_button(ui_app *a, ui_btn b, int pressed)
      * 功能选择页（feature == -1）
      *
      * 上下左右**都**移动高亮（用户要的是「上下左右滑」），OK 进去。
-     * 只有两个功能，所以左右与上下等价 —— 两对键都认，避免猜测。
+     * 左右与上下都能选 —— 两对键都认，避免猜测。
      * ACT 照旧切主题；BACK 在这一页没有上一级，不响应。
      * ------------------------------------------------------------------ */
     if (a->feature < 0) {
+        if (a->clear_confirm) {
+            if (b == UI_BTN_BACK) a->clear_confirm = 0;
+            else if (b == UI_BTN_OK) {
+                if (a->clear_confirm == 1) {
+                    clear_divination(a);
+                    a->clear_confirm = 2;
+                } else a->clear_confirm = 0;
+            }
+            return;
+        }
         if (b == UI_BTN_UP || b == UI_BTN_LEFT) {
-            a->pick = (a->pick + UI_FEATURE_COUNT - 1) % UI_FEATURE_COUNT;
+            a->pick = (a->pick + UI_PICK_COUNT - 1) % UI_PICK_COUNT;
         } else if (b == UI_BTN_DOWN || b == UI_BTN_RIGHT || b == UI_BTN_MENU) {
-            a->pick = (a->pick + 1) % UI_FEATURE_COUNT;
+            a->pick = (a->pick + 1) % UI_PICK_COUNT;
         } else if (b == UI_BTN_OK) {
-            a->feature = a->pick;
-            a->page    = UI_PAGE_TODAY;
-            a->flash   = 6;
+            if (a->pick == UI_PICK_CLEAR) a->clear_confirm = 1;
+            else {
+                a->feature = a->pick;
+                a->page    = UI_PAGE_TODAY;
+                a->flash   = 6;
+            }
         } else if (b == UI_BTN_ACT) {
             a->night = !a->night;
         }
         return;                            /* 这一页把**所有**键都截住 */
+    }
+
+    if (a->feature == UI_FEATURE_MEIHUA) {
+        if (a->page == UI_MEIHUA_PAGE_CAST_TIME) {
+            cast_editor_button(a, b);
+            return;
+        }
+        if (b == UI_BTN_BACK) {
+            if (a->page == UI_MEIHUA_PAGE_NUMBERS) a->page = UI_MEIHUA_PAGE_MODE;
+            else if (a->page == UI_MEIHUA_PAGE_MODE || a->page == UI_MEIHUA_PAGE_TIME)
+                a->page = UI_MEIHUA_PAGE_PICK;
+            else { a->feature = -1; a->pick = UI_FEATURE_MEIHUA; }
+            return;
+        }
+        if (a->page == UI_MEIHUA_PAGE_PICK) {
+            if (b == UI_BTN_UP || b == UI_BTN_DOWN)
+                a->meihua_pick = (a->meihua_pick + (b == UI_BTN_DOWN ? 1 : 2)) % 3;
+            else if (b == UI_BTN_OK) {
+                if (a->meihua_pick == 2) cast_editor_open(a, UI_MEIHUA_PAGE_CAST_TIME);
+                else a->page = a->meihua_pick ? UI_MEIHUA_PAGE_MODE : UI_MEIHUA_PAGE_TIME;
+            }
+            return;
+        }
+        if (a->page == UI_MEIHUA_PAGE_MODE) {
+            if (b == UI_BTN_UP || b == UI_BTN_DOWN) a->meihua_mode = !a->meihua_mode;
+            else if (b == UI_BTN_OK) {
+                a->meihua_row = 0;
+                a->page = UI_MEIHUA_PAGE_NUMBERS;
+            }
+            return;
+        }
+        if (a->page == UI_MEIHUA_PAGE_NUMBERS) {
+            if (b == UI_BTN_UP || b == UI_BTN_DOWN) {
+                if (a->meihua_mode) a->meihua_row = !a->meihua_row;
+            } else if (b == UI_BTN_MENU) {
+                a->meihua_step = !a->meihua_step;
+            } else if (b == UI_BTN_ACT) {
+                a->step_plus = !a->step_plus;
+            } else if (b == UI_BTN_OK) {
+                int *v = a->meihua_mode && a->meihua_row
+                       ? &a->meihua_second : &a->meihua_first;
+                const int step = a->meihua_step ? 10 : 1;
+                int next = *v + (a->step_plus ? step : -step);
+                if (next < 1) next = 1;
+                if (next > 999) next = 999;
+                *v = next;
+                a->flash = 6;
+            }
+            return;
+        }
+        return;
+    }
+
+    if (a->feature == UI_FEATURE_LIUYAO) {
+        if (a->page == UI_LIUYAO_PAGE_CAST_TIME) {
+            cast_editor_button(a, b);
+            return;
+        }
+        if (a->liuyao_cast_exiting) return;
+        if (a->page == UI_LIUYAO_PAGE_CHART && a->liuyao_cast_active) {
+            if (b == UI_BTN_OK && a->liuyao_cast_count == 6) {
+                a->liuyao_cast_exiting = 1;
+                a->liuyao_cast_exit_frame = 0;
+                return;
+            }
+            if (b == UI_BTN_BACK || b == UI_BTN_LEFT || b == UI_BTN_RIGHT) {
+                if (a->liuyao_cast_count < 6)
+                    for (int i = 0; i < 6; i++)
+                        a->liuyao_lines[i] = a->liuyao_cast_backup[i];
+                a->liuyao_cast_active = 0;
+                if (b == UI_BTN_BACK) return;
+            } else return;
+        }
+        if (b == UI_BTN_BACK) {
+            if (a->page == UI_LIUYAO_PAGE_SHENSHA) a->page = UI_LIUYAO_PAGE_CHART;
+            else { a->feature = -1; a->pick = UI_FEATURE_LIUYAO; }
+            return;
+        }
+        if (b == UI_BTN_LEFT || b == UI_BTN_RIGHT) {
+            const int next = (a->page + (b == UI_BTN_RIGHT ? 1 : 2))
+                           % UI_LIUYAO_PAGE_COUNT;
+            if (next == UI_LIUYAO_PAGE_CAST_TIME)
+                cast_editor_open(a, UI_LIUYAO_PAGE_CAST_TIME);
+            else a->page = next;
+            return;
+        }
+        if (a->page == UI_LIUYAO_PAGE_CHART) {
+            if (b == UI_BTN_UP && a->liuyao_row < 5) a->liuyao_row++;
+            else if (b == UI_BTN_DOWN && a->liuyao_row > 0) a->liuyao_row--;
+            else if (b == UI_BTN_ACT) a->step_plus = !a->step_plus;
+            else if (b == UI_BTN_OK) {
+                uint8_t *v = &a->liuyao_lines[a->liuyao_row];
+                *v = (uint8_t)(6 + ((*v - 6 + (a->step_plus ? 1 : 3)) % 4));
+                a->flash = 6;
+            }
+            return;
+        }
+        return;
     }
 
     /* ------------------------------------------------------------------
@@ -1853,14 +2262,14 @@ static double civil_jd(const ui_app *a, double jd_tt)
     return sf_tt_to_utc(jd_tt) + a->cal_cfg.utc_offset_minutes / 1440.0;
 }
 
-static void local_fields(const ui_app *a, sf_cal_datetime *out)
+static void local_fields_at(const ui_app *a, double jd_tt, sf_cal_datetime *out)
 {
     /* 注意：先整秒归整再拆。jd 在 2.46e6 量级，1 秒 ≈ 1.2e-5 天，末位本来就在
      * 5e-5 秒上下抖；直接对小数逐级截断的话 22:53:00 会显示成 22:52:59
      * （实测）。ui_calendar_from_jd 也是先 round 再拆的。
      *
      * 秒要留着：时柱在 23:00 换，差一秒就是另一个柱子。 */
-    const double shifted = civil_jd(a, a->jd) + 0.5;
+    const double shifted = civil_jd(a, jd_tt) + 0.5;
     const double day = floor(shifted);
 
     int32_t y = 0, mo = 0, d = 0;
@@ -1872,6 +2281,11 @@ static void local_fields(const ui_app *a, sf_cal_datetime *out)
     out->hour   = (int32_t)(secs / 3600);
     out->minute = (int32_t)((secs % 3600) / 60);
     out->second = (double)(secs % 60);
+}
+
+static void local_fields(const ui_app *a, sf_cal_datetime *out)
+{
+    local_fields_at(a, a->jd, out);
 }
 
 /* 四柱 + 虚拟时刻。
@@ -1901,6 +2315,46 @@ static void refresh_pillars(ui_app *a, int force)
     a->pillars_ok = (sf_ganzhi_four_pillars(&a->cal_cfg, sf_tt_to_ut(a->jd),
                                             &a->virtual_time, a->rat_hour,
                                             &a->pillars) == 0);
+}
+
+static int yijing_cfg_same(const sf_cal_config *x, const sf_cal_config *y)
+{
+    return x->mode == y->mode && x->day_boundary_mode == y->day_boundary_mode
+        && x->utc_offset_minutes == y->utc_offset_minutes
+        && x->pillar_historical_mode == y->pillar_historical_mode
+        && x->calendar_meridian_deg == y->calendar_meridian_deg;
+}
+
+static void refresh_yijing_time(ui_app *a)
+{
+    const double ut = cast_selected_ut(a);
+    const double day = floor(ut + calendar_day_offset(a) + 0.5);
+    const double minute = floor(ut * 1440.0);
+    const int cfg_changed = !yijing_cfg_same(&a->cal_cfg, &a->yijing_cached_cfg);
+    if (!a->yijing_lunar_ok || cfg_changed || day != a->yijing_cached_lunar_day) {
+        sf_solar_date s;
+        cast_solar_date(a, &s);
+        a->yijing_lunar_ok = sf_cal_from_solar(&a->cal_cfg, &s,
+                                               &a->yijing_lunar) == 0;
+        a->yijing_cached_lunar_day = day;
+    }
+    if (!a->yijing_pillars_ok || cfg_changed
+        || minute != a->yijing_cached_pillar_minute
+        || a->time_basis != a->yijing_cached_time_basis
+        || a->rat_hour != a->yijing_cached_rat_hour
+        || a->observer_lon != a->yijing_cached_observer_lon) {
+        sf_cal_datetime vt;
+        local_fields_at(a, sf_ut_to_tt(ut), &vt);
+        a->yijing_pillars_ok = sf_ganzhi_four_pillars(&a->cal_cfg, ut, &vt,
+                                      a->rat_hour, &a->yijing_pillars) == 0;
+        a->yijing_cached_pillar_minute = minute;
+        a->yijing_cached_time_basis = a->time_basis;
+        a->yijing_cached_rat_hour = a->rat_hour;
+        a->yijing_cached_observer_lon = a->observer_lon;
+    }
+    a->yijing_cached_cfg = a->cal_cfg;
+    ui_calendar_from_jd(ut + calendar_day_offset(a), NULL, NULL, NULL,
+                        &a->yijing_cast_hour, NULL, NULL);
 }
 
 static void rebuild_lunar_today(ui_app *a)
@@ -1993,7 +2447,49 @@ static void rebuild_rise(ui_app *a)
 
 void ui_app_prepare_visible(ui_app *a)
 {
-    if (!a || a->feature != UI_FEATURE_CALENDAR) return;
+    if (!a) return;
+    if (a->feature == UI_FEATURE_MEIHUA || a->feature == UI_FEATURE_LIUYAO) {
+        a->yijing_ok = 0;
+        a->yijing_kong_ok = 0;
+        refresh_yijing_time(a);
+        if (a->feature == UI_FEATURE_MEIHUA && a->page == UI_MEIHUA_PAGE_TIME) {
+            if (a->yijing_lunar_ok) {
+                a->yijing_ok = sf_meihua_from_lunar_time(
+                    sf_meihua_year_branch(a->yijing_lunar.year), a->yijing_lunar.month,
+                    a->yijing_lunar.day, sf_meihua_hour_branch(a->yijing_cast_hour),
+                    &a->meihua_chart) == 0;
+            }
+        } else if (a->feature == UI_FEATURE_MEIHUA
+                   && a->page == UI_MEIHUA_PAGE_NUMBERS) {
+            if (a->meihua_mode) {
+                a->yijing_ok = sf_meihua_from_numbers(
+                    (uint64_t)a->meihua_first, (uint64_t)a->meihua_second,
+                    &a->meihua_chart) == 0;
+            } else {
+                a->yijing_ok = sf_meihua_from_number(
+                    (uint64_t)a->meihua_first,
+                    sf_meihua_hour_branch(a->yijing_cast_hour),
+                    &a->meihua_chart) == 0;
+            }
+        } else if (a->feature == UI_FEATURE_LIUYAO
+                   && a->page == UI_LIUYAO_PAGE_CHART) {
+            a->yijing_ok = sf_liuyao_from_lines(a->liuyao_lines, &a->liuyao_chart) == 0;
+            if (a->yijing_pillars_ok)
+                a->yijing_kong_ok = sf_liuyao_shensha_four(
+                    (a->yijing_pillars.day >> 4) & 15, a->yijing_pillars.day & 15,
+                    &a->yijing_shensha) == 0;
+        } else if (a->feature == UI_FEATURE_LIUYAO
+                   && a->page == UI_LIUYAO_PAGE_SHENSHA) {
+            if (a->yijing_pillars_ok) {
+                const int stem = (a->yijing_pillars.day >> 4) & 15;
+                const int branch = a->yijing_pillars.day & 15;
+                a->yijing_ok = sf_liuyao_shensha_four(
+                    stem, branch, &a->yijing_shensha) == 0;
+            }
+        }
+        return;
+    }
+    if (a->feature != UI_FEATURE_CALENDAR) return;
 
     int dirty = 0;
     switch (a->page) {
@@ -2002,8 +2498,8 @@ void ui_app_prepare_visible(ui_app *a)
              || !a->pillars_ok;
         break;
     case UI_PAGE_LUNAR:  dirty = a->lunar_dirty || a->grid_dirty; break;
-    case UI_PAGE_TERMS:  dirty = a->year_term_dirty; break;
-    case UI_PAGE_PHASES: dirty = a->year_phase_dirty; break;
+    case UI_PAGE_TERMS:  dirty = a->year_term_dirty || a->year_jump_pending == UI_PAGE_TERMS; break;
+    case UI_PAGE_PHASES: dirty = a->year_phase_dirty || a->year_jump_pending == UI_PAGE_PHASES; break;
     case UI_PAGE_SUN:    dirty = !a->rise_cached; break;
     default: break;
     }
@@ -2036,6 +2532,7 @@ void ui_app_prepare_visible(ui_app *a)
             rebuild_year_terms(a);
             a->year_term_dirty = 0;
         }
+        year_jump_scroll(a);
         break;
 
     case UI_PAGE_PHASES:
@@ -2043,6 +2540,7 @@ void ui_app_prepare_visible(ui_app *a)
             rebuild_year_phases(a);
             a->year_phase_dirty = 0;
         }
+        year_jump_scroll(a);
         break;
 
     case UI_PAGE_SUN:

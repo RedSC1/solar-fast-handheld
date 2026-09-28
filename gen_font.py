@@ -8,8 +8,8 @@
 
 字符集是**扫源码扫出来的**，不是手写的
     只扫**字符串字面量**（正则只匹配单行 "..."，不碰注释 —— 否则三行中文
-    注释就能把字库撑爆），并且把 sf_solve.c 里的 SF_SOLAR_TERM_NAMES 一起
-    扫进来。所以字库永远不会和 UI 脱节：改了 UI 里的字，重跑一次就有。
+    注释就能把字库撑爆），并且扫描 solar-fast 核心库中会返回给 UI 的
+    节气、干支、月相等名字表。缺少任一源文件时直接失败，不生成残缺字库。
 
 用法
     python3 sim/gen_font.py                 # 写 sim/ui_font.h
@@ -115,8 +115,7 @@ def collect(paths):
     wide, narrow = set(), set()
     for p in paths:
         if not os.path.exists(p):
-            print("  (跳过不存在的 %s)" % p)
-            continue
+            raise FileNotFoundError("字库必需的源码不存在：%s" % p)
         for lit in scan_literals(open(p, encoding="utf-8").read()):
             for ch in lit:
                 cp = ord(ch)
@@ -211,18 +210,20 @@ def main():
     print("latin = %s (index %d, %s)" % (latin_path, latin_idx, latin_name))
     print("cjk   = %s (index %d, %s)" % (cjk_path, cjk_idx, cjk_name))
 
-    # 只扫**往屏上画**的文件。main.c 不扫 —— 它的中文是控制台提示，
-    # LCD 上一个字都用不到，扫进来白白占 flash。
+    # 只扫**往屏上画**的文件。main.c 不扫 —— 它的中文是控制台提示。
+    # SF_DIR 与 Makefile 同源；拆成两个仓库后，不能再假定核心 .c 在上一级根目录。
+    sf_dir = os.path.abspath(os.path.join(HERE, os.environ.get("SF_DIR", "../solar-fast")))
     srcs = [
         os.path.join(HERE, "ui_view.c"),
         os.path.join(HERE, "ui_app.c"),
-        os.path.join(HERE, "ui_gfx.c"),           # ui_btn_names 在这（目前是 ASCII）
-        os.path.join(HERE, "..", "sf_ganzhi.c"),  # 天干地支、纳音名等汉字
-    # ⚠️ 八字那两张名字表（十神 / 十二长生 / 五行）在 sf_bazi_rules.c 里 ——
-    # **新功能的字放到新建的 .c 里，就必须把它加到这里**，否则屏上全是空心框，
-    # 而 `--dump` 只会报一个漏字数，第一反应总是怀疑字库本身。
-    os.path.join(HERE, "..", "sf_bazi_rules.c"),
-        os.path.join(HERE, "..", "sf_series.c"),  # SF_SOLAR_TERM_NAMES 在这
+        os.path.join(HERE, "ui_gfx.c"),
+        os.path.join(sf_dir, "core", "sf_series.c"),
+        os.path.join(sf_dir, "core", "sf_solve.c"),
+        os.path.join(sf_dir, "calendar", "sf_calendar.c"),
+        os.path.join(sf_dir, "calendar", "sf_ganzhi.c"),
+        os.path.join(sf_dir, "bazi", "sf_bazi_rules.c"),
+        os.path.join(sf_dir, "qishuo", "sf_qishuo.c"),
+        os.path.join(sf_dir, "yijing", "sf_yijing.c"),
     ]
     wide, narrow = collect(srcs)
 
@@ -256,9 +257,9 @@ def main():
               % (name, cw, ch, th, len(tab), len(blob)))
 
     with open(a.out, "w", encoding="utf-8") as f:
-        f.write("/* 自动生成，勿手改 —— 由 sim/gen_font.py 产出。\n"
+        f.write("/* 自动生成，勿手改 —— 由 gen_font.py 产出。\n"
                 " * 字体：latin = %s / cjk = %s\n"
-                " * 重新生成：make -C sim font\n"
+                " * 重新生成：make font\n"
                 " */\n" % (latin_name, cjk_name))
         f.write("#ifndef UI_FONT_H\n#define UI_FONT_H\n\n#include <stdint.h>\n\n")
         f.write("typedef struct { uint16_t cp; uint8_t adv; uint16_t off; } ui_glyph;\n")

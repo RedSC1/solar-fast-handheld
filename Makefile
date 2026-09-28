@@ -16,7 +16,7 @@ OPT    ?= -O2
 WARN   := -Wall -Wextra
 CFLAGS := -std=c99 $(OPT) $(WARN) -D_GNU_SOURCE -I. -I$(SF_DIR) \
           -I$(SF_DIR)/include -I$(SF_DIR)/core -I$(SF_DIR)/rise \
-          -I$(SF_DIR)/qishuo -I$(SF_DIR)/calendar -I$(SF_DIR)/bazi
+          -I$(SF_DIR)/qishuo -I$(SF_DIR)/calendar -I$(SF_DIR)/bazi -I$(SF_DIR)/yijing
 LDLIBS := -lm
 
 BACKEND ?= cocoa
@@ -28,7 +28,8 @@ UI_SRC := ui_gfx.c ui_app.c ui_view.c sim_frame.c main.c
 LIBSRC := $(SF_DIR)/core/sf_fixed.c $(SF_DIR)/core/sf_series.c $(SF_DIR)/core/sf_solve.c \
           $(SF_DIR)/calendar/sf_calendar.c $(SF_DIR)/calendar/sf_ganzhi.c \
           $(SF_DIR)/rise/sf_rise.c $(SF_DIR)/qishuo/sf_qishuo.c \
-          $(SF_DIR)/bazi/sf_bazi_rules.c $(SF_DIR)/bazi/sf_bazi.c
+          $(SF_DIR)/bazi/sf_bazi_rules.c $(SF_DIR)/bazi/sf_bazi.c \
+          $(SF_DIR)/yijing/sf_yijing.c
 LIBOBJ := $(notdir $(LIBSRC:.c=.o))
 
 ifeq ($(BACKEND),cocoa)
@@ -71,12 +72,15 @@ $(BIN): $(UI_SRC) $(HOST_SRC) $(LIBOBJ) ui.h host.h ui_font.h
 %.o: $(SF_DIR)/bazi/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+%.o: $(SF_DIR)/yijing/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 font:
-	python3 gen_font.py
+	SF_DIR="$(SF_DIR)" python3 gen_font.py
 	@rm -f $(BIN)
 
 font-preview:
-	python3 gen_font.py --preview /tmp/ui_font_preview.png
+	SF_DIR="$(SF_DIR)" python3 gen_font.py --preview /tmp/ui_font_preview.png
 	@echo "预览图已生成至 /tmp/ui_font_preview.png"
 
 clean:

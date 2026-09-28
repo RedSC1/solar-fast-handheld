@@ -9,3 +9,17 @@ sim
 
 # 本地工具（不随库发布）
 private/
+
+# ESP-IDF hardware-test build outputs
+firmware/build*/
+firmware/sdkconfig
+firmware/sdkconfig.old
+
+# Local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx

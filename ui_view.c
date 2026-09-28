@@ -230,17 +230,24 @@ static void draw_topbar(const ui_app *a, const ui_theme *t,
                    &ui_font_s, a->flash > 0 ? t->on_accent : t->dim, right);
 }
 
-/* 页码点。**点始终反映当前这一级**：
- *   选择页 → UI_FEATURE_COUNT 个（选的是哪个功能）
+/* 页码点。可左右切换的页面才显示；梅花的选择流程不显示：
+ *   选择页 → UI_PICK_COUNT 个（含末尾的清空操作）
  *   功能内 → 该功能的子页数（选的是哪一页）
  * 所以它会跟着 feature 换长度 —— 这正是「两级」在屏上的表达。 */
 static void draw_page_dots(const ui_app *a, const ui_theme *t)
 {
     int n, cur;
     if (a->feature < 0) {
-        n = UI_FEATURE_COUNT;  cur = a->pick;
+        if (a->clear_confirm) return;
+        n = UI_PICK_COUNT;  cur = a->pick;
     } else if (a->feature == UI_FEATURE_BAZI) {
         n = UI_BAZI_PAGE_COUNT; cur = a->page;
+    } else if (a->feature == UI_FEATURE_MEIHUA) {
+        /* 梅花是逐级选择流程，左右键不翻页；四个点会误示为可切换 tab。 */
+        return;
+    } else if (a->feature == UI_FEATURE_LIUYAO) {
+        if (a->page == UI_LIUYAO_PAGE_CAST_TIME) return;
+        n = UI_LIUYAO_PAGE_COUNT; cur = a->page;
     } else {
         n = UI_PAGE_COUNT;     cur = a->page;
     }
@@ -495,8 +502,9 @@ static void draw_year_topbar(const ui_app *a, const ui_theme *t,
 {
     char r[24];
     snprintf(title, tn, "%d 年%s", a->view_year, kind);
-    snprintf(r, sizeof r, "%c%g年", a->step_plus ? '+' : '-',
-             ui_app_step_magnitude(a));
+    const double mag = ui_app_step_magnitude(a);
+    if (mag == 0.0) snprintf(r, sizeof r, "回今");
+    else snprintf(r, sizeof r, "%c%g年", a->step_plus ? '+' : '-', mag);
     draw_topbar(a, t, title, r);
 }
 
@@ -630,7 +638,9 @@ static void page_sun(const ui_app *a, const ui_theme *t)
         const int ry = top + i * row_h;
         switch (i) {
         case 0: snprintf(r, sizeof r, "%.4f°", norm2pi(a->sunlon) * 180.0 / M_PI); break;
-        case 1: snprintf(r, sizeof r, "%+.4f°", a->sunlat * 180.0 / M_PI);         break;
+        /* 太阳黄纬通常不到 1″；4 位度数会把不少日期显示成 0.0000°。
+         * 多显示两位仅为看清变化，不表示星历有 0.004″ 的绝对精度。 */
+        case 1: snprintf(r, sizeof r, "%+.6f°", a->sunlat * 180.0 / M_PI);         break;
         /* 5 位小数（≈1500 km），不是 6 位：6 位时 "1.004595 AU" 有 11 个
          * 半角字宽 = 99 px，右对齐到 0.96 后左端落在 54.6，正好撞上
          * "日地距离" 的尾巴（48 px 宽、从 6.4 起 = 到 54.4）。库自身精度
@@ -882,33 +892,47 @@ static void page_settings(const ui_app *a, const ui_theme *t)
  * 功能选择页（feature == -1 时显示）
  *
  * 两级页面的**第一级**：一张卡片一个功能。上下左右**都**移动高亮 ——
- * 只有两个功能，两对键等价，但两对都接受，以免用户猜测。
+ * 四个功能加一个清空操作，两对方向键都能选，以免用户猜测。
  * ================================================================== */
 static void page_pick(const ui_app *a, const ui_theme *t)
 {
+    if (a->clear_confirm) {
+        draw_topbar(a, t, a->clear_confirm == 1 ? "清空卦象？" : "已清空", "");
+        if (a->clear_confirm == 1) {
+            ui_text(12, 25, &ui_font_m, t->fg, "清空梅花与六爻");
+            ui_text(12, 55, &ui_font_s, t->dim, "占时、报数、爻象归初始");
+            ui_text(12, 75, &ui_font_s, t->dim, "设备时间和设置保留");
+            ui_text(12, 105, &ui_font_s, t->accent, "K5确认  K6取消");
+        } else {
+            ui_text(12, 33, &ui_font_m, t->fg, "梅花六爻已清空");
+            ui_text(12, 75, &ui_font_s, t->dim, "时间和设置未改变");
+            ui_text(12, 105, &ui_font_s, t->accent, "K5或K6返回");
+        }
+        return;
+    }
     char buf[64], l[32];
     fmt_ymd(buf, sizeof buf, to_local(a->jd));
     fmt_time(l, sizeof l, to_local(a->jd));
     draw_topbar(a, t, buf, l);
 
-    static const char *const NAMES[UI_FEATURE_COUNT] = { "万年历", "八字" };
-    static const char *const SUBS[UI_FEATURE_COUNT]  = {
-        "节气 · 农历 · 日月", "四柱 · 大运 · 流年"
+    static const char *const NAMES[UI_PICK_COUNT] = {
+        "万年历", "八字", "梅花", "六爻", "清空卦象"
+    };
+    static const char *const SUBS[UI_PICK_COUNT]  = {
+        "节气农历", "四柱运限", "五卦体用", "摇卦纳甲", "仅梅花六爻"
     };
 
-    for (int i = 0; i < UI_FEATURE_COUNT; i++) {
-        const float y = 0.235f + 0.30f * (float)i;
+    for (int i = 0; i < UI_PICK_COUNT; i++) {
         const int sel = (i == a->pick);
-        const ui_rect r = ui_box_to_rect(UI_BOX(0.12f, y, 0.76f, 0.245f));
+        const int y = 16 + i * 21;
+        const ui_rect r = {13, y, 134, 19};
         /* 选中整块反色；未选中只描细框。描边两边都画 —— 反色块在纸白底上
          * 本来就够醒目，框是给夜间主题补轮廓的，两处统一。 */
         if (sel) ui_fill(r, t->accent);
         ui_frame(r, sel ? t->accent : t->rule);
 
-        ui_text_in(UI_BOX(0.12f, y, 0.76f, 0.13f), UI_HCENTER, UI_VCENTER,
-                   &ui_font_m, sel ? t->on_accent : t->fg, NAMES[i]);
-        ui_text_in(UI_BOX(0.12f, y + 0.125f, 0.76f, 0.11f), UI_HCENTER, UI_VCENTER,
-                   &ui_font_s, sel ? t->on_accent : t->dim, SUBS[i]);
+        ui_text(20, y + 3, &ui_font_s, sel ? t->on_accent : t->fg, NAMES[i]);
+        ui_text(92, y + 5, &ui_font_xs, sel ? t->on_accent : t->dim, SUBS[i]);
     }
 }
 
@@ -1528,6 +1552,445 @@ static void page_chart(const ui_app *a, const ui_theme *t)
 }
 
 /* ------------------------------------------------------------------
+ * 梅花 / 六爻。仅显示结构化卦象，不把经文或断语塞进小屏固件。
+ * ------------------------------------------------------------------ */
+static const char *meihua_relation_name(sf_meihua_relation v)
+{
+    static const char *const names[] = {
+        "同气", "体生用", "用生体", "体克用", "用克体"
+    };
+    return (unsigned)v < 5 ? names[v] : "--";
+}
+
+static void meihua_hex_tile(const ui_theme *t, int x, int y, const char *label,
+                            const sf_hexagram *h, int moving_line)
+{
+    char value[32];
+    snprintf(value, sizeof value, "%s%s", label, h->name);
+    ui_text(x, y, &ui_font_s, t->fg, value);
+    for (int top = 0; top < 6; top++) {
+        const int line = 5 - top; /* 掩码 bit 0 是初爻，画在最下面 */
+        const int yy = y + 13 + top * 3;
+        const uint16_t color = line + 1 == moving_line ? t->accent : t->fg;
+        if ((h->yang_mask >> line) & 1u)
+            ui_fill((ui_rect){x + 2, yy, 41, 2}, color);
+        else {
+            ui_fill((ui_rect){x + 2, yy, 17, 2}, color);
+            ui_fill((ui_rect){x + 26, yy, 17, 2}, color);
+        }
+    }
+}
+
+static void yijing_meihua_chart(const ui_app *a, const ui_theme *t, int top)
+{
+    if (!a->yijing_ok) {
+        ui_text(10, top, &ui_font_s, t->dim, "历法无结果");
+        return;
+    }
+    const sf_meihua_chart *c = &a->meihua_chart;
+    /* 五环式 3＋2：每个卦名和卦画始终挨在一起，不画一整列条形码。 */
+    meihua_hex_tile(t, 4, top, "本", &c->primary, c->moving_line);
+    meihua_hex_tile(t, 56, top, "变", &c->changed, c->moving_line);
+    meihua_hex_tile(t, 108, top, "互", &c->mutual, 0);
+    meihua_hex_tile(t, 30, top + 35, "错", &c->opposite, 0);
+    meihua_hex_tile(t, 82, top + 35, "综", &c->reversed, 0);
+    char s[40];
+    snprintf(s, sizeof s, "动%d 体用:%s", c->moving_line,
+             meihua_relation_name(c->body_use));
+    ui_text(5, 107, &ui_font_s, t->accent, s);
+}
+
+static void page_meihua_choice(const ui_app *a, const ui_theme *t, int mode)
+{
+    draw_topbar(a, t, mode ? "梅花·报数" : "梅花起卦", "K5选择");
+    const char *const labels[3] = {
+        mode ? "单数起卦" : "农历时间",
+        mode ? "双数起卦" : "报数起卦",
+        "设置占时"
+    };
+    const char *const hints[3] = {
+        mode ? "一数配时辰" : "按当前农历",
+        mode ? "上下两数" : "单数或双数",
+        "公历/农历输入"
+    };
+    const int selected = mode ? a->meihua_mode : a->meihua_pick;
+    for (int i = 0; i < (mode ? 2 : 3); i++) {
+        const int y = mode ? 27 + i * 43 : 18 + i * 34;
+        const int sel = i == selected;
+        const ui_rect r = {10, y, 140, mode ? 35 : 30};
+        if (sel) ui_fill(r, t->accent);
+        ui_frame(r, sel ? t->accent : t->rule);
+        ui_text(19, y + 2, &ui_font_m, sel ? t->on_accent : t->fg, labels[i]);
+        ui_text(20, y + (mode ? 22 : 18), &ui_font_xs,
+                sel ? t->on_accent : t->dim, hints[i]);
+    }
+}
+
+static void yijing_lunar_title(const ui_app *a, char *out, size_t n)
+{
+    if (!a->yijing_lunar_ok) { snprintf(out, n, "农历无结果"); return; }
+    sf_ganzhi g;
+    const sf_lunar_date *l = &a->yijing_lunar;
+    const int branch = sf_meihua_hour_branch(a->yijing_cast_hour);
+    if (sf_ganzhi_year_of(l->historical_year, &g) != 0) {
+        snprintf(out, n, "农历%s月%s", lunar_month_name(l), lunar_day_name(l->day));
+        return;
+    }
+    char year[12];
+    ganzhi_str(year, sizeof year, g);
+    snprintf(out, n, "%s年%s%s月%s%s时", year,
+             l->is_leap ? "闰" : "", lunar_month_name(l),
+             lunar_day_name(l->day),
+             branch >= 1 && branch <= 12 ? SF_EARTHLY_BRANCHES[branch - 1] : "?");
+}
+
+/* 报数页顶栏右侧要留给 ±步长；左侧仍保留农历月日时辰。 */
+static void yijing_lunar_short_title(const ui_app *a, char *out, size_t n)
+{
+    if (!a->yijing_lunar_ok) { snprintf(out, n, "农历无结果"); return; }
+    const sf_lunar_date *l = &a->yijing_lunar;
+    const int branch = sf_meihua_hour_branch(a->yijing_cast_hour);
+    snprintf(out, n, "%s%s月%s%s时", l->is_leap ? "闰" : "",
+             lunar_month_name(l), lunar_day_name(l->day),
+             branch >= 1 && branch <= 12 ? SF_EARTHLY_BRANCHES[branch - 1] : "?");
+}
+
+static void page_meihua_time(const ui_app *a, const ui_theme *t)
+{
+    char title[64];
+    yijing_lunar_title(a, title, sizeof title);
+    draw_topbar(a, t, title, "");
+    yijing_meihua_chart(a, t, 30);
+}
+
+static void page_meihua_numbers(const ui_app *a, const ui_theme *t)
+{
+    char value[20];
+    char title[64];
+    char step[16];
+    yijing_lunar_short_title(a, title, sizeof title);
+    snprintf(step, sizeof step, "%c%d", a->step_plus ? '+' : '-',
+             a->meihua_step ? 10 : 1);
+    draw_topbar(a, t, title, step);
+    for (int row = 0; row < 2; row++) {
+        const int y = 16 + row * 12;
+        const int sel = row == a->meihua_row && (a->meihua_mode || row == 0);
+        if (sel) ui_fill((ui_rect){0, y, UI_W, 12}, t->accent);
+        const uint16_t color = sel ? t->on_accent : row == 1 && !a->meihua_mode
+                              ? t->dim : t->fg;
+        ui_text(7, y, &ui_font_s, color,
+                row ? (a->meihua_mode ? "下数" : "时辰")
+                    : (a->meihua_mode ? "上数" : "报数"));
+        if (row && !a->meihua_mode) {
+            const int branch = sf_meihua_hour_branch(a->yijing_cast_hour);
+            snprintf(value, sizeof value, "%s", branch >= 1 && branch <= 12
+                     ? SF_EARTHLY_BRANCHES[branch - 1] : "--");
+        } else snprintf(value, sizeof value, "%d",
+                        row ? a->meihua_second : a->meihua_first);
+        ui_text(154 - ui_text_w(&ui_font_s, value), y + 1, &ui_font_s, color, value);
+    }
+    yijing_meihua_chart(a, t, 42);
+}
+
+static void page_yijing_cast_time(const ui_app *a, const ui_theme *t)
+{
+    char title[32], step[16];
+    snprintf(title, sizeof title, "%s·%s",
+             a->feature == UI_FEATURE_MEIHUA ? "梅花" : "六爻",
+             a->cast_input_lunar ? "农历" : "公历");
+    snprintf(step, sizeof step, "%c%d", a->step_plus ? '+' : '-',
+             a->cast_step ? 10 : 1);
+    draw_topbar(a, t, title, step);
+    static const char *const labels[8] = {
+        "历法", "年", "月", "闰月", "日", "时", "分", "跟随现在"
+    };
+    const int first = a->cast_row < 4 ? 0 : a->cast_row - 4;
+    for (int slot = 0; slot < 5; slot++) {
+        const int row = first + slot;
+        char value[32] = "";
+        switch (row) {
+        case 0: snprintf(value, sizeof value, "%s", a->cast_input_lunar ? "农历" : "公历"); break;
+        case 1: snprintf(value, sizeof value, "%d", a->cast_year); break;
+        case 2: snprintf(value, sizeof value, "%02d", a->cast_month); break;
+        case 3: snprintf(value, sizeof value, "%s", a->cast_input_lunar
+                         ? (a->cast_leap ? "是" : "否") : "--"); break;
+        case 4: snprintf(value, sizeof value, "%02d", a->cast_day); break;
+        case 5: snprintf(value, sizeof value, "%02d", a->cast_hour); break;
+        case 6: snprintf(value, sizeof value, "%02d", a->cast_minute); break;
+        default: break;
+        }
+        const int y = 17 + slot * 19;
+        const int sel = row == a->cast_row;
+        if (sel) ui_fill((ui_rect){2, y, 156, 18}, t->accent);
+        const uint16_t color = sel ? t->on_accent : t->fg;
+        ui_text(8, y, &ui_font_m, color, labels[row]);
+        if (row < 7)
+            ui_text(153 - ui_text_w(&ui_font_m, value), y,
+                    &ui_font_m, color, value);
+    }
+    if (a->cast_error) ui_text(6, 113, &ui_font_s, t->accent, "日期无效");
+    else {
+        char hint[32];
+        snprintf(hint, sizeof hint, "%s  K7档  %d/8",
+                 a->cast_dirty ? "K6保存" : "K6返回",
+                 a->cast_row + 1);
+        ui_text(6, 113, &ui_font_xs, t->dim, hint);
+    }
+}
+
+static int yijing_branch_is_kong(const ui_app *a, uint8_t branch)
+{
+    return a->yijing_kong_ok
+        && (branch == a->yijing_shensha.kong_wang[0]
+            || branch == a->yijing_shensha.kong_wang[1]);
+}
+
+/* 小屏在线起卦：右侧三钱停摇后先翻落，随后左侧显爻；下次起摇时
+ * 三钱短距离升到下一爻。动画不消耗随机数，第二次 K7 才真正掷币。 */
+static void page_yijing_cast(const ui_app *a, const ui_theme *t)
+{
+    char prompt[48];
+    draw_topbar(a, t, "三钱起卦", "K7摇/停");
+    if (!a->liuyao_cast_spinning
+        && a->liuyao_cast_land < UI_CAST_LAND_FRAMES)
+        snprintf(prompt, sizeof prompt, "第%d爻  落币中", a->liuyao_cast_count);
+    else if (!a->liuyao_cast_spinning
+             && a->liuyao_cast_reveal < UI_CAST_REVEAL_FRAMES)
+        snprintf(prompt, sizeof prompt, "第%d爻  成爻中", a->liuyao_cast_count);
+    else if (a->liuyao_cast_count == 6)
+        snprintf(prompt, sizeof prompt, "六爻已成  K5看纳甲");
+    else
+        snprintf(prompt, sizeof prompt, "第%d爻  %s", a->liuyao_cast_count + 1,
+                 a->liuyao_cast_spinning ? "再按K7停币" : "按K7摇币");
+    ui_text(5, 16, &ui_font_s, t->fg, prompt);
+
+    for (int i = 0; i < 6; i++) {
+        const int y = 101 - i * 13;
+        if (i >= a->liuyao_cast_count) {
+            ui_hline(21, 64, y, t->rule);
+            continue;
+        }
+        const uint8_t v = a->liuyao_lines[i];
+        const uint16_t color = (v == 6 || v == 9) ? t->accent : t->fg;
+        const int end = (i == a->liuyao_cast_count - 1
+                         && a->liuyao_cast_reveal < UI_CAST_REVEAL_FRAMES)
+                      ? 21 + 43 * (int)a->liuyao_cast_reveal / UI_CAST_REVEAL_FRAMES
+                      : 64;
+        if (v == 7 || v == 9) {
+            if (end > 21) ui_hline(21, end, y, color);
+        }
+        else {
+            if (end > 21) ui_hline(21, end < 37 ? end : 37, y, color);
+            if (end >= 48) ui_hline(48, end, y, color);
+        }
+        if (end < 64) continue;
+        if (v == 9) ui_ring(72, y, 3, t->accent);
+        else if (v == 6) {
+            for (int d = -3; d <= 3; d++) {
+                ui_px(72 + d, y + d, t->accent);
+                ui_px(72 + d, y - d, t->accent);
+            }
+        }
+    }
+
+    const int current = a->liuyao_cast_spinning || a->liuyao_cast_count == 0
+                      ? a->liuyao_cast_count : a->liuyao_cast_count - 1;
+    if (current < 0 || current > 5) return;
+    int cy = 101 - current * 13;
+    if (a->liuyao_cast_spinning && current > 0
+        && a->liuyao_cast_slide < UI_CAST_SLIDE_FRAMES) {
+        const int p = (int)a->liuyao_cast_slide;
+        const int d = UI_CAST_SLIDE_FRAMES;
+        cy += 13 - (13 * p * (2 * d - p) + d * d / 2) / (d * d);
+    }
+    static const int8_t landing_lift[UI_CAST_LAND_FRAMES + 1] =
+        {7, 5, 2, 0, -2, 1, 0};
+    for (int i = 0; i < 3; i++) {
+        const int cx = 91 + i * 24;
+        const int bob = a->liuyao_cast_spinning
+                      ? (int)((a->liuyao_cast_frame + (unsigned)i * 2u) % 5u) - 2
+                      : -landing_lift[a->liuyao_cast_land];
+        const int yy = cy + bob;
+        ui_disc(cx, yy, 8, t->panel);
+        ui_ring(cx, yy, 8, t->accent);
+        if (a->liuyao_cast_count == 0 && !a->liuyao_cast_spinning) {
+            ui_disc(cx, yy, 2, t->dim); /* 待摇：三枚钱尚未定正反。 */
+        } else if (a->liuyao_cast_spinning
+            || a->liuyao_cast_land < UI_CAST_LAND_FRAMES) {
+            /* 停摇后继续翻几帧并下落，落稳才展示已经抽好的币面。 */
+            const unsigned phase = a->liuyao_cast_spinning
+                ? a->liuyao_cast_frame : a->liuyao_cast_land;
+            if (((phase + (unsigned)i) & 1u) == 0)
+                ui_disc(cx, yy, 2, t->dim);
+            else ui_ring(cx, yy, 4, t->dim);
+        } else if (a->liuyao_coin_faces[i]) {
+            ui_hline(cx - 3, cx + 3, yy, t->fg); /* 正面 + */
+            ui_vline(cx, yy - 3, yy + 3, t->fg);
+        } else {
+            ui_hline(cx - 3, cx + 3, yy, t->fg); /* 反面 − */
+        }
+    }
+}
+
+static void page_yijing_liuyao_detail(const ui_app *a, const ui_theme *t)
+{
+    static const char *const trigram_names[8] = {
+        "乾", "兑", "离", "震", "巽", "坎", "艮", "坤"
+    };
+    static const char *const stage_names[8] = {
+        "本", "一世", "二世", "三世", "四世", "五世", "游魂", "归魂"
+    };
+    static const char *const relations[5] = {
+        "兄", "子", "财", "官", "父"
+    };
+    static const char *const spirits[6] = {
+        "龙", "雀", "勾", "蛇", "虎", "玄"
+    };
+    const sf_liuyao_chart *c = &a->liuyao_chart;
+    const sf_liuyao_najia *n = &c->primary_najia;
+    char title[64] = "六爻";
+    if (a->yijing_pillars_ok) {
+        const unsigned ys = (a->yijing_pillars.year >> 4) & 15u;
+        const unsigned yb = a->yijing_pillars.year & 15u;
+        const unsigned ms = (a->yijing_pillars.month >> 4) & 15u;
+        const unsigned mb = a->yijing_pillars.month & 15u;
+        const unsigned ds = (a->yijing_pillars.day >> 4) & 15u;
+        const unsigned db = a->yijing_pillars.day & 15u;
+        const unsigned hs = (a->yijing_pillars.hour >> 4) & 15u;
+        const unsigned hb = a->yijing_pillars.hour & 15u;
+        if (ys < 10 && yb < 12 && ms < 10 && mb < 12
+            && ds < 10 && db < 12 && hs < 10 && hb < 12)
+            snprintf(title, sizeof title, "%s%s年%s%s月%s%s日%s%s时",
+                     SF_HEAVENLY_STEMS[ys], SF_EARTHLY_BRANCHES[yb],
+                     SF_HEAVENLY_STEMS[ms], SF_EARTHLY_BRANCHES[mb],
+                     SF_HEAVENLY_STEMS[ds], SF_EARTHLY_BRANCHES[db],
+                     SF_HEAVENLY_STEMS[hs], SF_EARTHLY_BRANCHES[hb]);
+    }
+    draw_topbar(a, t, "", "");
+    ui_text_in(UI_BOX(0.03f, 0.00f, 0.94f, 0.10f), UI_LEFT, UI_VCENTER,
+               &ui_font_s, a->flash > 0 ? t->on_accent : t->fg, title);
+    if (!a->yijing_ok) return;
+    char heading[48];
+    snprintf(heading, sizeof heading, "本%s", c->primary.name);
+    ui_text(3, 15, &ui_font_s, t->fg, heading);
+    const int palace_x = 5 + ui_text_w(&ui_font_s, heading);
+    snprintf(heading, sizeof heading, "(%s宫%s)",
+             trigram_names[n->palace_number - 1], stage_names[n->palace_stage]);
+    ui_text(palace_x, 17, &ui_font_xs, t->dim, heading);
+    snprintf(heading, sizeof heading, "变%s", c->changed.name);
+    ui_text(100, 15, &ui_font_s, t->fg, heading);
+    snprintf(heading, sizeof heading, "%s/%s",
+             SF_HEAVENLY_STEMS[n->stems[0]], SF_HEAVENLY_STEMS[n->stems[3]]);
+    ui_text(3, 28, &ui_font_s, t->dim, heading);
+    if (a->yijing_kong_ok) {
+        const int k0 = a->yijing_shensha.kong_wang[0];
+        const int k1 = a->yijing_shensha.kong_wang[1];
+        snprintf(heading, sizeof heading, "空%s%s",
+                 SF_EARTHLY_BRANCHES[k0 < k1 ? k0 : k1],
+                 SF_EARTHLY_BRANCHES[k0 < k1 ? k1 : k0]);
+        ui_text(44, 28, &ui_font_s, t->fg, heading);
+    }
+    snprintf(heading, sizeof heading, "%s/%s",
+             SF_HEAVENLY_STEMS[c->changed_najia.stems[0]],
+             SF_HEAVENLY_STEMS[c->changed_najia.stems[3]]);
+    ui_text(100, 28, &ui_font_s, t->dim, heading);
+    for (int i = 5; i >= 0; i--) {
+        const int y = 40 + (5 - i) * 13;
+        const int sel = i == a->liuyao_row;
+        const uint8_t v = a->liuyao_lines[i];
+        if (sel) ui_fill((ui_rect){0, y, 2, 12}, t->accent);
+        const int moving = v == 6 || v == 9;
+        const uint16_t line_color = moving ? t->accent : t->fg;
+        const uint16_t primary_branch_color =
+            yijing_branch_is_kong(a, n->branches[i]) ? t->dim : t->fg;
+        const uint16_t changed_branch_color =
+            yijing_branch_is_kong(a, c->changed_najia.branches[i]) ? t->dim : t->fg;
+        const int yy = y + 6;
+        if (a->yijing_pillars_ok) {
+            const int day_stem = (a->yijing_pillars.day >> 4) & 15;
+            const int spirit = sf_liuyao_six_spirit(day_stem, i + 1);
+            if (spirit >= 0)
+                ui_text(2, y + 2, &ui_font_xs, t->dim, spirits[spirit]);
+        }
+        ui_text(12, y + 2, &ui_font_xs, t->fg, relations[c->primary_relations[i]]);
+        ui_text(23, y, &ui_font_s, primary_branch_color,
+                SF_EARTHLY_BRANCHES[n->branches[i]]);
+        if (v == 7 || v == 9) ui_hline(38, 53, yy, line_color);
+        else { ui_hline(38, 43, yy, line_color); ui_hline(49, 53, yy, line_color); }
+        if (i + 1 == n->shi_line) ui_text(55, y + 2, &ui_font_xs, t->fg, "世");
+        else if (i + 1 == n->ying_line)
+            ui_text(55, y + 2, &ui_font_xs, t->dim, "应");
+        if (c->hidden_relations[i] < 5) {
+            ui_text(64, y + 2, &ui_font_xs, t->accent,
+                    relations[c->hidden_relations[i]]);
+            ui_text(72, y + 2, &ui_font_xs, t->accent,
+                    SF_HEAVENLY_STEMS[c->hidden_stems[i]]);
+            ui_text(80, y + 2, &ui_font_xs,
+                    yijing_branch_is_kong(a, c->hidden_branches[i]) ? t->dim : t->accent,
+                    SF_EARTHLY_BRANCHES[c->hidden_branches[i]]);
+        }
+        /* 老阳九画圈、老阴六画叉；放在两卦之间作为动变对应标记。 */
+        if (v == 9) ui_ring(95, yy, 3, t->accent);
+        else if (v == 6) {
+            for (int d = -3; d <= 3; d++) {
+                ui_px(95 + d, yy + d, t->accent);
+                ui_px(95 + d, yy - d, t->accent);
+            }
+        }
+
+        ui_text(100, y + 2, &ui_font_xs, t->fg, relations[c->changed_relations[i]]);
+        ui_text(111, y, &ui_font_s, changed_branch_color,
+                SF_EARTHLY_BRANCHES[c->changed_najia.branches[i]]);
+        const int changed_yang = (c->changed.yang_mask >> i) & 1;
+        if (changed_yang) ui_hline(127, 149, yy, line_color);
+        else { ui_hline(127, 135, yy, line_color);
+               ui_hline(141, 149, yy, line_color); }
+    }
+}
+
+static void page_yijing_liuyao(const ui_app *a, const ui_theme *t)
+{
+    if (a->liuyao_cast_active) page_yijing_cast(a, t);
+    else {
+        page_yijing_liuyao_detail(a, t);
+        ui_text(3, 117, &ui_font_xs, t->accent, "K7摇卦");
+    }
+}
+
+static void page_yijing_shensha(const ui_app *a, const ui_theme *t)
+{
+    draw_topbar(a, t, "神煞", "日柱");
+    if (!a->yijing_ok) {
+        ui_text(10, 28, &ui_font_s, t->dim, "日柱无结果");
+        return;
+    }
+    const sf_liuyao_four_shensha *s = &a->yijing_shensha;
+    static const char *const labels[] = {"驿马", "空亡", "桃花", "贵人"};
+    char value[24];
+    for (int i = 0; i < 4; i++) {
+        const int y = 21 + i * 22;
+        switch (i) {
+        case 0: snprintf(value, sizeof value, "%s", SF_EARTHLY_BRANCHES[s->yi_ma]); break;
+        case 1: {
+            const int k0 = s->kong_wang[0], k1 = s->kong_wang[1];
+            snprintf(value, sizeof value, "%s%s",
+                     SF_EARTHLY_BRANCHES[k0 < k1 ? k0 : k1],
+                     SF_EARTHLY_BRANCHES[k0 < k1 ? k1 : k0]);
+            break;
+        }
+        case 2: snprintf(value, sizeof value, "%s", SF_EARTHLY_BRANCHES[s->tao_hua]); break;
+        default: snprintf(value, sizeof value, "%s%s",
+                          SF_EARTHLY_BRANCHES[s->gui_ren[0]],
+                          SF_EARTHLY_BRANCHES[s->gui_ren[1]]); break;
+        }
+        ui_text(10, y, &ui_font_s, t->dim, labels[i]);
+        ui_text(154 - ui_text_w(&ui_font_m, value), y - 2,
+                &ui_font_m, t->fg, value);
+        if (i) ui_hline(8, 152, y - 4, t->rule);
+    }
+}
+
+/* ------------------------------------------------------------------
  * 入口
  * ------------------------------------------------------------------ */
 void ui_render(ui_app *a)
@@ -1539,7 +2002,7 @@ void ui_render(ui_app *a)
 
     ui_clear(t->bg);
 
-    /* 注意：**先看 feature 再看 page** —— page 是两个功能共用的裸 int，
+    /* 注意：**先看 feature 再看 page** —— page 是各功能共用的裸 int，
      * UI_BAZI_PAGE_CHART(1) 跟 UI_PAGE_LUNAR(1) 是同一个值。 */
     if (a->feature < 0) {
         page_pick(a, t);
@@ -1549,6 +2012,34 @@ void ui_render(ui_app *a)
         case UI_BAZI_PAGE_CHART:    page_chart(a, t); break;
         case UI_BAZI_PAGE_LUCK:     page_luck(a, t);  break;
         case UI_BAZI_PAGE_SETTINGS: page_bset(a, t);  break;
+        default: break;
+        }
+    } else if (a->feature == UI_FEATURE_MEIHUA) {
+        switch (a->page) {
+        case UI_MEIHUA_PAGE_PICK:    page_meihua_choice(a, t, 0); break;
+        case UI_MEIHUA_PAGE_TIME:    page_meihua_time(a, t); break;
+        case UI_MEIHUA_PAGE_MODE:    page_meihua_choice(a, t, 1); break;
+        case UI_MEIHUA_PAGE_NUMBERS: page_meihua_numbers(a, t); break;
+        case UI_MEIHUA_PAGE_CAST_TIME: page_yijing_cast_time(a, t); break;
+        default: break;
+        }
+    } else if (a->feature == UI_FEATURE_LIUYAO) {
+        switch (a->page) {
+        case UI_LIUYAO_PAGE_CHART:
+            if (a->liuyao_cast_exiting) {
+                /* 底部初爻先变成纳甲行，边界逐帧向上扫到上爻。
+                 * 按绘制裁剪分别画两个页面，不留第二份 40 KiB 帧缓冲。 */
+                const int split = UI_H - UI_H * (int)a->liuyao_cast_exit_frame
+                                  / UI_CAST_EXIT_FRAMES;
+                ui_clip_y(0, split);
+                page_yijing_cast(a, t);
+                ui_clip_y(split, UI_H);
+                page_yijing_liuyao_detail(a, t);
+                ui_clip_y(0, UI_H);
+            } else page_yijing_liuyao(a, t);
+            break;
+        case UI_LIUYAO_PAGE_SHENSHA: page_yijing_shensha(a, t); break;
+        case UI_LIUYAO_PAGE_CAST_TIME: page_yijing_cast_time(a, t); break;
         default: break;
         }
     } else {

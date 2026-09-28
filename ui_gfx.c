@@ -13,18 +13,25 @@
  * 帧缓冲
  * ------------------------------------------------------------------ */
 static uint16_t *s_fb;
+static int s_clip_y0 = 0, s_clip_y1 = UI_H;
 
 static int s_missing;      /* 画不出来的字形次数，见 ui_missing_glyphs() */
 
-void ui_init(uint16_t *fb) { s_fb = fb; s_missing = 0; }
+void ui_init(uint16_t *fb) { s_fb = fb; s_missing = 0; ui_clip_y(0, UI_H); }
 const uint16_t *ui_fb(void) { return s_fb; }
+
+void ui_clip_y(int y0, int y1)
+{
+    s_clip_y0 = y0 < 0 ? 0 : y0 > UI_H ? UI_H : y0;
+    s_clip_y1 = y1 < 0 ? 0 : y1 > UI_H ? UI_H : y1;
+}
 
 int  ui_missing_glyphs(void) { return s_missing; }
 void ui_missing_reset(void)  { s_missing = 0; }
 
 void ui_px(int x, int y, uint16_t c)
 {
-    if ((unsigned)x < (unsigned)UI_W && (unsigned)y < (unsigned)UI_H)
+    if ((unsigned)x < (unsigned)UI_W && y >= s_clip_y0 && y < s_clip_y1)
         s_fb[y * UI_W + x] = c;
 }
 
@@ -35,7 +42,7 @@ void ui_clear(uint16_t c)
 
 void ui_hline(int x0, int x1, int y, uint16_t c)
 {
-    if ((unsigned)y >= (unsigned)UI_H) return;
+    if (y < s_clip_y0 || y >= s_clip_y1) return;
     if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
     if (x0 < 0) x0 = 0;
     if (x1 >= UI_W) x1 = UI_W - 1;
@@ -46,8 +53,9 @@ void ui_vline(int x, int y0, int y1, uint16_t c)
 {
     if ((unsigned)x >= (unsigned)UI_W) return;
     if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
-    if (y0 < 0) y0 = 0;
-    if (y1 >= UI_H) y1 = UI_H - 1;
+    if (y0 < s_clip_y0) y0 = s_clip_y0;
+    if (y1 >= s_clip_y1) y1 = s_clip_y1 - 1;
+    if (y0 > y1) return;
     for (int y = y0; y <= y1; y++) s_fb[y * UI_W + x] = c;
 }
 
@@ -406,14 +414,13 @@ const ui_theme ui_theme_day = {
     /* 五行色，**索引顺序是 SF_WUXING_\*：水 0 木 1 金 2 土 3 火 4**，
      * 不是「金木水火土」的习惯顺序 —— 不得照习惯重排。
      *
-     * 网页（opendestiny-web 的 bazi 页）那五个 hex 按白底调，日间这套照抄，
-     * 只把土提亮一点（原值 #795548 在白底上偏浑，「土」与「金」
-     * #A47700 也易看混，故拉开）。 */
+     * 网页（opendestiny-web 的 bazi 页）那五个 hex 按白底调。土在小 TN 屏
+     * 上容易灰化，提饱和度为暖棕，同时与金色 #A47700 拉开。 */
     .wuxing    = {
         UI_RGB(0x15, 0x65, 0xC0),   /* 0 水 #1565C0 蓝 */
         UI_RGB(0x2E, 0x7D, 0x32),   /* 1 木 #2E7D32 绿 */
         UI_RGB(0xA4, 0x77, 0x00),   /* 2 金 #A47700 暗金 */
-        UI_RGB(0x8D, 0x6E, 0x63),   /* 3 土 #8D6E63 棕（网页是 #795548） */
+        UI_RGB(0xA4, 0x60, 0x3F),   /* 3 土 #A4603F 暖棕 */
         UI_RGB(0xC6, 0x28, 0x28),   /* 4 火 #C62828 红 */
     },
 };
@@ -438,7 +445,7 @@ const ui_theme ui_theme_night = {
         UI_RGB(110, 170, 255),      /* 0 水 亮蓝 */
         UI_RGB(110, 205, 125),      /* 1 木 亮绿 */
         UI_RGB(235, 195,  90),      /* 2 金 亮金 */
-        UI_RGB(205, 150, 110),      /* 3 土 亮棕 */
+        UI_RGB(217, 137,  66),      /* 3 土 亮暖棕 */
         UI_RGB(255, 110, 100),      /* 4 火 亮红 */
     },
 };
